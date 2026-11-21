@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oyun Salonu</title>
+<style>
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+body { display: flex; align-items: center; justify-content: center; }
+#game { display: block; position: relative; z-index: 2; }
+#oyun { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 1; visibility: hidden; background: #000; }
+#testp { position: fixed; right: 8px; top: 8px; z-index: 9; display: flex; flex-direction: column; gap: 4px; }
+#testp button { font: 13px sans-serif; padding: 6px 10px; border-radius: 6px; border: 0; background: #2d2f55; color: #fff; cursor: pointer; text-align: left; }
+</style>
+</head>
+<body>
+<iframe id="oyun" allow="autoplay" src="about:blank"></iframe>
+<canvas id="game" width="1080" height="1920"></canvas>
+<script>
+/* =====================================================================
+   NET – oyunun dış dünyayla bağlantısı.
+   • Tek başına açılırsa köprüye (ws://localhost:8080) bağlanır.
+   • Oyun Salonu'nun içinde (iframe, ?salon=1) açılırsa olayları salondan alır,
+     spiker isteklerini ve "oyun bitti" haberini salona gönderir.
+   Kullanım: NET.on(m => …)  NET.send({type:'say',…})  NET.open()  NET.finish({…})
+   ===================================================================== */
+const NET = (function () {
+  const embedded = window.parent !== window && /[?&]salon=1\b/.test(location.search);
+  const handlers = [];
+  let ws = null, status = embedded ? 'salon' : 'bağlı değil', readySent = false;
+  const emit = m => { for (const h of handlers) { try { h(m); } catch (e) { console.error(e); } } };
+  function screenInfo() { return { type: 'ekran', w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1, ua: navigator.userAgent.slice(0, 160) }; }
+  function wsUrl() {
+    if (location.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return 'ws://' + location.host + '/ws';
+    return 'ws://localhost:8080';
+  }
+  function connect() {
+    let s;
+    try { s = new WebSocket(wsUrl()); } catch (e) { setTimeout(connect, 4000); return; }
+    ws = s;
+    s.onopen = () => { status = 'bağlı'; send(screenInfo()); };
+    s.onmessage = m => { try { const d = JSON.parse(m.data); for (const x of Array.isArray(d) ? d : [d]) if (x) emit(x); } catch (e) { /* bozuk */ } };
+    s.onerror = () => {};
+    s.onclose = () => { status = 'bağlı değil'; if (ws === s) ws = null; setTimeout(connect, 4000); };
+  }
+  function send(o) {
+    if (embedded) { try { window.parent.postMessage({ salonOyun: true, msg: o }, '*'); } catch (e) { /* sessiz */ } return; }
+    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch (e) { /* sessiz */ } }
+  }
+  if (embedded) {
+    window.addEventListener('message', ev => {
+      if (ev.source !== window.parent) return;
+      const d = ev.data; if (d && d.salon && d.msg) emit(d.msg);
+    });
+  } else if (!/[?&]baglanti=0\b/.test(location.search)) setTimeout(connect, 0);
+  return {
+    embedded,
+    on(fn) { handlers.push(fn); },
+    send,
+    open() { return embedded || (!!ws && ws.readyState === 1); },
+    get status() { return status; },
+    // oyun hazır: salon bekleyen oyuncuları gönderir
+    ready() { if (embedded && !readySent) { readySent = true; send({ type: 'hazir' }); } },
+    // oyun bitti: salon oylamaya döner
+    finish(summary) { if (embedded) send(Object.assign({ type: 'bitti' }, summary || {})); }
+  };
+})();
+
+</script>
+<script>
+/* =====================================================================
+   ORTAK – salon ve 2D oyunların paylaştığı araçlar
+   (çizim yardımcıları, ekran ölçekleme, spiker, ses efektleri, olay biçimi)
+   Gerekli: net.js önce yüklenmiş olmalı. Sayfada <canvas id="game"> bulunmalı.
+   ===================================================================== */
+'use strict';
+const W = 1080, H = 1920;
+const SAFE_TOP = 222, SAFE_BOTTOM = 1300;      // TikTok uygulamasında üst ~215 px ve alttaki yorumlar kapanır
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let RS = 1;
+function fit() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const cw = Math.floor(W * s), ch = Math.floor(H * s);
+  canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+  RS = Math.round(Math.min(2, Math.max(1, cw * (window.devicePixelRatio || 1) / W)) * 4) / 4;
+  if (canvas.width !== Math.round(W * RS)) { canvas.width = Math.round(W * RS); canvas.height = Math.round(H * RS); }
+}
+window.addEventListener('resize', fit); fit();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[(Math.random() * a.length) | 0];
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const TAU = Math.PI * 2;
+const FONT = '"Segoe UI", "Trebuchet MS", Tahoma, sans-serif';
+const TFONT = 'Georgia, "Palatino Linotype", "Times New Roman", serif';
+const fmt = n => Math.round(n).toLocaleString('tr-TR');
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function rrPath(g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  g.beginPath(); g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+function setFont(size, o) { ctx.font = ((o && o.weight) || 'bold') + ' ' + size + 'px ' + ((o && o.font) || FONT); }
+function txt(s, x, y, size, color, align, o) {
+  o = o || {};
+  setFont(size, o);
+  ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  if (o.stroke !== false) { ctx.lineJoin = 'round'; ctx.lineWidth = o.lw || Math.max(3, size / 6); ctx.strokeStyle = o.sc || 'rgba(8,10,18,0.9)'; ctx.strokeText(s, x, y); }
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function fitText(s, maxW) {
+  if (ctx.measureText(s).width <= maxW) return s;
+  const a = Array.from(s);
+  while (a.length > 1 && ctx.measureText(a.join('') + '…').width > maxW) a.pop();
+  return a.join('') + '…';
+}
+function panel(x, y, w, h, r, fill, stroke, lw) {
+  rrPath(ctx, x, y, w, h, r); ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 3; ctx.stroke(); }
+}
+function cleanName(n, max) {
+  n = String(n == null ? '' : n).replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim();
+  if (!n) n = 'Anonim';
+  const a = Array.from(n);
+  return a.length > max ? a.slice(0, max).join('') + '…' : n;
+}
+const BANNED_WORDS = ['amk', 'aq', 'orospu', 'piç', 'pic', 'sik', 'yarrak', 'göt', 'got', 'ibne', 'pezevenk', 'kahpe', 'siktir', 'amın', 'amin', 'gavat', 'sürtük', 'mal', 'salak', 'aptal', 'fuck', 'shit', 'bitch', 'porn', 'sex', 'seks'];
+function speakName(raw) {
+  let s = String(raw || '').normalize('NFC').replace(/[_.\-]+/g, ' ').replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+  s = Array.from(s).slice(0, 20).join('').trim();
+  if (!s || !/\p{L}/u.test(s)) return 'bir izleyici';
+  const low = s.toLocaleLowerCase('tr'), words = low.split(' ');
+  for (const b of BANNED_WORDS) if (b.length <= 3 ? words.includes(b) : low.includes(b)) return 'bir izleyici';
+  return s;
+}
+// köprüden gelen olayı tek biçime çevirir
+function normEvent(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  const type = String(ev.type || '').toLowerCase();
+  if (!['chat', 'like', 'gift', 'follow', 'share', 'member'].includes(type)) return null;
+  const key = String(ev.user || ev.nickname || 'anonim').slice(0, 80);
+  const raw = String(ev.nickname || ev.user || 'Anonim');
+  return { type, key, raw, name: cleanName(raw, 16), text: String(ev.text || '').slice(0, 200),
+    count: Math.max(1, Math.min(Math.floor(Number(ev.count) || 1), 100000)), diamonds: Math.max(0, Math.floor(Number(ev.diamonds) || 0)) };
+}
+const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
+
+/* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
+const SPEECH = (function () {
+  const queue = [], waiting = new Map(), lastCat = {};
+  let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
+  const now = () => performance.now() / 1000;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  function say(text, prio, cat, cooldown) {
+    if (!text) return;
+    if (cat && cooldown && lastCat[cat] != null && now() - lastCat[cat] < cooldown) return;
+    if (cat) lastCat[cat] = now();
+    const item = { text, prio: prio || 1 };
+    if (queue.length >= 3) {
+      let lo = 0; for (let i = 1; i < queue.length; i++) if (queue[i].prio < queue[lo].prio) lo = i;
+      if (queue[lo].prio >= item.prio) return;
+      queue.splice(lo, 1);
+    }
+    let i = queue.findIndex(q => q.prio < item.prio); if (i < 0) i = queue.length;
+    queue.splice(i, 0, item); pump();
+  }
+  function pump() {
+    if (busy || !queue.length) return;
+    const it = queue.shift(); busy = true; caption = it.text; captionAt = performance.now();
+    play(it.text).then(() => { busy = false; setTimeout(pump, 250); });
+  }
+  async function play(text) {
+    if (NET.open()) { const b64 = await request(text); if (b64 && await playWav(b64)) return; }
+    if ('speechSynthesis' in window) { await browserSay(text); return; }
+    await wait(Math.min(5000, 1200 + text.length * 55));
+  }
+  function request(text) {
+    return new Promise(res => {
+      const id = ++reqId, to = setTimeout(() => { waiting.delete(id); res(null); }, 6000);
+      waiting.set(id, b64 => { clearTimeout(to); res(b64); });
+      NET.send({ type: 'say', id, text });
+    });
+  }
+  function onTTS(m) { const f = waiting.get(m.id); if (f) { waiting.delete(m.id); f(m.audio || null); } }
+  function playWav(b64) {
+    return new Promise(res => {
+      try {
+        const bin = atob(b64), u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const url = URL.createObjectURL(new Blob([u8], { type: 'audio/wav' }));
+        const a = new Audio(url);
+        let done = false; const fin = okk => { if (done) return; done = true; URL.revokeObjectURL(url); res(okk); };
+        a.onended = () => fin(true); a.onerror = () => fin(false); setTimeout(() => fin(true), 15000);
+        a.play().catch(() => fin(false));
+      } catch (e) { res(false); }
+    });
+  }
+  function browserSay(text) {
+    return new Promise(res => {
+      try {
+        const u = new SpeechSynthesisUtterance(text); u.lang = 'tr-TR'; u.rate = 1.08;
+        const v = speechSynthesis.getVoices().find(x => /^tr/i.test(x.lang)); if (v) u.voice = v;
+        let done = false; const fin = () => { if (!done) { done = true; res(); } };
+        u.onend = fin; u.onerror = fin; setTimeout(fin, 12000); speechSynthesis.speak(u);
+      } catch (e) { res(); }
+    });
+  }
+  return { say, onTTS, get speaking() { return busy; }, get caption() { return caption; }, get captionAge() { return (performance.now() - captionAt) / 1000; }, clear() { queue.length = 0; } };
+})();
+
+/* ---------- Ses efektleri (dosyasız, telifsiz) ---------- */
+const SFX = (function () {
+  let ac = null, master = null;
+  function A() {
+    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination); } catch (e) { return null; } }
+    if (ac.state === 'suspended') ac.resume().catch(() => {});
+    return ac;
+  }
+  function tone(f, d, type, vol, slide, delay) {
+    const a = A(); if (!a) return;
+    const t = a.currentTime + (delay || 0), o = a.createOscillator(), g = a.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f * slide), t + d);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.05);
+  }
+  function noise(d, vol, hp) {
+    const a = A(); if (!a) return;
+    const b = a.createBuffer(1, Math.floor(a.sampleRate * d), a.sampleRate), ch = b.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / ch.length);
+    const s = a.createBufferSource(), g = a.createGain(), f = a.createBiquadFilter();
+    f.type = 'highpass'; f.frequency.value = hp || 600; s.buffer = b; g.gain.value = vol || 0.15;
+    s.connect(f); f.connect(g); g.connect(master); s.start();
+  }
+  return {
+    join() { tone(660, 0.12, 'triangle', 0.15); tone(990, 0.15, 'triangle', 0.12, 1, 0.08); },
+    vote() { tone(880, 0.08, 'square', 0.06); },
+    tick() { tone(1200, 0.05, 'square', 0.05); },
+    go() { tone(523, 0.18, 'triangle', 0.2); tone(659, 0.18, 'triangle', 0.2, 1, 0.15); tone(784, 0.35, 'triangle', 0.22, 1, 0.3); },
+    thanks() { tone(784, 0.15, 'sine', 0.18); tone(1046, 0.25, 'sine', 0.18, 1, 0.12); tone(1318, 0.3, 'sine', 0.15, 1, 0.24); },
+    pull() { tone(140, 0.12, 'sawtooth', 0.05, 0.7); },
+    cheer() { noise(1.2, 0.12, 900); },
+    win() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => tone(f, 0.28, 'triangle', 0.2, 1, i * 0.16)); noise(1.6, 0.1, 1200); },
+    boom() { tone(90, 0.5, 'sawtooth', 0.25, 0.4); noise(0.5, 0.2, 200); }
+  };
+})();
+window.addEventListener('pointerdown', () => SFX.vote(), { once: true });
+
+/* ---------- Konfeti ---------- */
+const CONFETTI = [];
+function confetti(n, x, y) {
+  for (let i = 0; i < n; i++) CONFETTI.push({ x: x == null ? rand(0, W) : x, y: y == null ? rand(-200, 0) : y, vx: rand(-200, 200), vy: rand(-300, 200), g: 500, rot: rand(0, TAU), vr: rand(-8, 8), size: rand(12, 22), life: rand(2, 3.5), color: pick(['#ffd23d', '#ff5a7a', '#4fc3f7', '#7ee081', '#ffffff', '#ff9f1a']) });
+  if (CONFETTI.length > 600) CONFETTI.splice(0, CONFETTI.length - 600);
+}
+function updConfetti(dt) {
+  for (let i = CONFETTI.length - 1; i >= 0; i--) {
+    const p = CONFETTI[i]; p.life -= dt; if (p.life <= 0) { CONFETTI.splice(i, 1); continue; }
+    p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+  }
+}
+function drawConfetti() {
+  for (const p of CONFETTI) { ctx.save(); ctx.globalAlpha = clamp(p.life, 0, 1); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2); ctx.restore(); }
+}
+
+/* ---------- Spiker altyazısı (üst bilgi şeridi) ---------- */
+function drawCaption(y) {
+  const c = SPEECH.caption; if (!c || SPEECH.captionAge > 7) return;
+  const a = clamp(7 - SPEECH.captionAge, 0, 1);
+  ctx.save(); ctx.globalAlpha = a;
+  panel(24, y, 1032, 56, 14, 'rgba(14,18,34,0.85)', 'rgba(255,210,61,0.7)', 2);
+  setFont(26); txt('🎙️ ' + fitText(c, 960), 44, y + 29, 26, '#ffffff', 'left', { stroke: false });
+  ctx.restore();
+}
+
+/* ---------- Ana döngü ---------- */
+function startLoop(update, render) {
+  let last = performance.now();
+  function frame(ts) {
+    const dt = clamp((ts - last) / 1000, 0, 0.05); last = ts;
+    try { update(dt); updConfetti(dt); ctx.setTransform(RS, 0, 0, RS, 0, 0); render(); drawConfetti(); } catch (e) { console.error(e); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+</script>
+<script>
+/* =====================================================================
+   OYUN SALONU – oylama ekranı + oyun değiştirici
+   Döngü: oylama (yorumla 1/2/3) → seçilen oyun (iframe) → "bitti" → oylama …
+   Hediye ve beğeni oyu ETKİLEMEZ; oy yalnızca yorumla verilir.
+   ===================================================================== */
+const SALON = {
+  voteSeconds: 30,          // oylama süresi
+  extendSeconds: 20,        // hiç oy gelmezse oylama bu kadar uzar
+  maxVoteSeconds: 70,       // yine oy yoksa rastgele seçilir
+  revealSeconds: 4.5,       // kazanan oyun gösterimi
+  options: 3,               // oylamada kaç oyun
+  readyTimeout: 25,         // oyun bu sürede açılmazsa oylamaya dön
+  maxGameMinutes: 20        // oyun takılırsa bu süreden sonra oylamaya dön
+};
+// Yeni oyun eklemek için buraya bir satır ekleyin (url: site/ içindeki dosya)
+const OYUNLAR = [
+  { id: 'maraton', ad: 'MARATON', ikon: '🏃', renk: '#ff8a1a', acik: 'Beğeniyle koş · en arkada kalan elenir', url: 'maraton.html', kelime: ['maraton', 'koşu', 'kosu'] },
+  { id: 'halat', ad: 'HALAT ÇEKME', ikon: '💪', renk: '#e53935', acik: 'Kırmızı mı Mavi mi? Takımını seç, çek!', url: 'halat.html', kelime: ['halat', 'çekme', 'cekme'] }
+];
+
+const frame = document.getElementById('oyun');
+const S = {
+  t: 0, phase: 'oylama', phaseT: 0, voteEnd: 0, voteStart: 0, options: [], votes: new Map(), feed: [],
+  last: null, chosen: null, players: new Map(), buffer: [], gameReady: false, gameStart: 0, round: 0
+};
+
+function chooseOptions() {
+  let pool = OYUNLAR.slice();
+  if (pool.length > SALON.options && S.last) pool = pool.filter(g => g.id !== S.last);   // aynı oyun art arda gelmesin
+  for (let i = pool.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  return pool.slice(0, SALON.options);
+}
+function startVote() {
+  S.phase = 'oylama'; S.phaseT = 0; S.round++;
+  S.options = chooseOptions(); S.votes.clear(); S.feed = []; S.players.clear();
+  S.voteStart = S.t; S.voteEnd = S.t + SALON.voteSeconds;
+  frame.style.visibility = 'hidden'; frame.src = 'about:blank'; canvas.style.display = '';
+  S.gameReady = false;
+  const list = S.options.map((g, i) => (i + 1) + ' ' + g.ad.toLocaleLowerCase('tr')).join(', ');
+  SPEECH.say('Sıradaki oyunu siz seçiyorsunuz! Yoruma numarasını yazın: ' + list + '.', 3);
+}
+function tally() { const c = S.options.map(() => 0); for (const v of S.votes.values()) c[v.idx]++; return c; }
+function endVote() {
+  const c = tally(), total = c.reduce((a, b) => a + b, 0);
+  if (!total && S.t - S.voteStart < SALON.maxVoteSeconds) {
+    S.voteEnd = S.t + SALON.extendSeconds;
+    SPEECH.say('Henüz oy yok! Yoruma 1, 2 ya da 3 yazarak oyunu seçin.', 2);
+    return;
+  }
+  const max = Math.max(...c), best = c.map((v, i) => (v === max ? i : -1)).filter(i => i >= 0);
+  const idx = best[(Math.random() * best.length) | 0];
+  S.chosen = S.options[idx]; S.last = S.chosen.id;
+  S.phase = 'secildi'; S.phaseT = 0;
+  SFX.win(); confetti(140);
+  SPEECH.say((total ? 'Oylama bitti! Kazanan oyun: ' : 'Oy gelmedi, oyunu ben seçtim: ') + S.chosen.ad.toLocaleLowerCase('tr') + '!', 3);
+  // oyunu arkada şimdiden yükle
+  S.buffer = [];
+  frame.src = S.chosen.url + '?salon=1&r=' + S.round;
+}
+function showGame() {
+  S.phase = 'oyun'; S.phaseT = 0; S.gameStart = S.t;
+  frame.style.visibility = 'visible'; canvas.style.display = 'none';
+}
+
+/* ---------- olaylar ---------- */
+function matchVote(text) {
+  const t = trLow(text).trim();
+  const m = t.match(/^#?\s*([1-9])(?!\d)/);
+  if (m) { const i = Number(m[1]) - 1; return i < S.options.length ? i : -1; }
+  for (let i = 0; i < S.options.length; i++) if (S.options[i].kelime.some(k => t.includes(k))) return i;
+  return -1;
+}
+function onTikTok(raw) {
+  const e = normEvent(raw); if (!e) return;
+  if (S.phase === 'oylama' || S.phase === 'secildi') {
+    if (e.type === 'chat' || e.type === 'like' || e.type === 'gift') S.players.set(e.key, { user: e.key, nickname: e.raw });
+    if (S.phase === 'oylama' && e.type === 'chat') {
+      const idx = matchVote(e.text);
+      if (idx >= 0) {
+        const prev = S.votes.get(e.key);
+        if (!prev || prev.idx !== idx) {
+          S.votes.set(e.key, { idx, name: e.name });
+          S.feed.unshift({ name: e.name, idx, t: S.t }); if (S.feed.length > 6) S.feed.pop();
+          SFX.vote();
+        }
+      }
+    }
+    if (S.phase === 'secildi') { S.buffer.push(raw); if (S.buffer.length > 300) S.buffer.shift(); }
+    return;
+  }
+  if (S.phase === 'oyun') toGame(raw);
+}
+function toGame(msg) { try { frame.contentWindow.postMessage({ salon: true, msg }, '*'); } catch (e) { /* sessiz */ } }
+NET.on(m => {
+  if (m.type === 'tts') { SPEECH.onTTS(m); toGame(m); return; }
+  onTikTok(m);
+});
+window.addEventListener('message', ev => {
+  if (ev.source !== frame.contentWindow) return;
+  const d = ev.data; if (!d || !d.salonOyun || !d.msg) return;
+  const m = d.msg;
+  if (m.type === 'say') { NET.send(m); return; }
+  if (m.type === 'hazir') {
+    S.gameReady = true;
+    toGame({ type: 'oyuncular', list: Array.from(S.players.values()) });
+    for (const x of S.buffer) toGame(x); S.buffer = [];
+    return;
+  }
+  if (m.type === 'bitti' && S.phase === 'oyun') { startVote(); return; }
+});
+
+/* ---------- güncelleme ---------- */
+function update(dt) {
+  S.t += dt; S.phaseT += dt;
+  if (S.phase === 'oylama') {
+    const left = S.voteEnd - S.t;
+    if (left <= 5 && Math.ceil(left) !== Math.ceil(left + dt)) SFX.tick();
+    if (left <= 0) endVote();
+  } else if (S.phase === 'secildi') {
+    if (S.phaseT >= SALON.revealSeconds && (S.gameReady || S.phaseT > SALON.readyTimeout)) {
+      if (S.gameReady) showGame(); else startVote();
+    }
+  } else if (S.phase === 'oyun') {
+    if (S.t - S.gameStart > SALON.maxGameMinutes * 60) startVote();
+  }
+}
+
+/* ---------- çizim ---------- */
+const BG_ICONS = Array.from({ length: 22 }, (_, i) => ({ x: rand(0, W), y: rand(0, H), s: rand(40, 90), v: rand(10, 30), r: rand(0, TAU), i }));
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#120b2e'); g.addColorStop(0.5, '#1d1450'); g.addColorStop(1, '#0a0a1c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // dönen spot ışıkları
+  for (let k = 0; k < 3; k++) {
+    const a = Math.sin(S.t * 0.5 + k * 2.1) * 0.5, x0 = 180 + k * 360;
+    ctx.save(); ctx.translate(x0, -40); ctx.rotate(a);
+    const lg = ctx.createLinearGradient(0, 0, 0, 1500);
+    lg.addColorStop(0, 'rgba(255,255,255,0.16)'); lg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = lg; ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(20, 0); ctx.lineTo(260, 1500); ctx.lineTo(-260, 1500); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 0.12;
+  for (const b of BG_ICONS) {
+    b.y -= b.v / 60; if (b.y < -100) { b.y = H + 100; b.x = rand(0, W); }
+    const ic = OYUNLAR[b.i % OYUNLAR.length].ikon;
+    ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.r + S.t * 0.2); txt(ic, 0, 0, b.s, '#fff', 'center', { stroke: false }); ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawVote() {
+  const left = Math.max(0, S.voteEnd - S.t), c = tally(), total = c.reduce((a, b) => a + b, 0), max = Math.max(1, ...c);
+  // başlık
+  txt('SIRADAKİ OYUNU SEN SEÇ!', 540, 268, 64, '#ffd23d', 'center', { font: TFONT, lw: 10 });
+  const nums = S.options.map((_, i) => i + 1).join(' · ');
+  panel(150, 312, 780, 64, 32, 'rgba(255,255,255,0.12)', 'rgba(255,255,255,0.35)', 2);
+  txt('💬 Yoruma numarasını yaz:  ' + nums, 540, 345, 34, '#ffffff', 'center', { lw: 6 });
+  // kartlar
+  const n = S.options.length, top = 400, bottom = 1130, gap = 22, ch = (bottom - top - gap * (n - 1)) / n;
+  const lead = total ? c.indexOf(Math.max(...c)) : -1;
+  S.options.forEach((g, i) => {
+    const y = top + i * (ch + gap), x = 40, w = 1000, isLead = i === lead;
+    const pulse = isLead ? 0.5 + 0.5 * Math.sin(S.t * 6) : 0;
+    ctx.save();
+    if (isLead) { ctx.shadowColor = g.renk; ctx.shadowBlur = 30 + pulse * 20; }
+    panel(x, y, w, ch, 26, 'rgba(18,16,44,0.92)', isLead ? '#ffd23d' : 'rgba(255,255,255,0.25)', isLead ? 6 : 3);
+    ctx.restore();
+    // numara rozeti
+    ctx.fillStyle = g.renk; ctx.beginPath(); ctx.arc(x + 80, y + ch / 2, 56, 0, TAU); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.stroke();
+    txt(String(i + 1), x + 80, y + ch / 2 + 4, 72, '#ffffff', 'center', { font: TFONT, lw: 8 });
+    // ikon + ad
+    const bob = Math.sin(S.t * 3 + i) * 6;
+    txt(g.ikon, x + 210, y + ch / 2 - 16 + bob, 92, '#fff', 'center', { stroke: false });
+    txt(g.ad, x + 290, y + 58, 52, '#ffffff', 'left', { font: TFONT, lw: 8 });
+    setFont(26); txt(fitText(g.acik, 640), x + 292, y + 108, 26, '#cfd3f2', 'left', { stroke: false });
+    // oy çubuğu
+    const by = y + ch - 62, bw = 660, bx = x + 290, frac = c[i] / max;
+    panel(bx, by, bw, 38, 19, 'rgba(255,255,255,0.12)');
+    if (c[i]) { panel(bx, by, Math.max(38, bw * frac * (total ? 1 : 0)), 38, 19, g.renk); }
+    const pct = total ? Math.round(100 * c[i] / total) : 0;
+    txt(c[i] + ' oy · %' + pct, bx + bw - 14, by + 20, 26, '#ffffff', 'right', { lw: 5 });
+  });
+  // süre
+  const ty = 1192;
+  panel(330, ty - 44, 420, 88, 44, left <= 5 ? 'rgba(200,30,30,0.9)' : 'rgba(255,255,255,0.14)', '#ffd23d', 3);
+  txt('⏱️ ' + Math.ceil(left) + ' sn', 540, ty + 2, 52, '#ffffff', 'center', { lw: 8 });
+  // son oy verenler
+  const fy = 1262;
+  const items = S.feed.slice(0, 3).map(f => '✅ ' + f.name + ' → ' + (f.idx + 1));
+  if (items.length) { setFont(26); txt(fitText(items.join('   '), 1000), 540, fy, 26, '#9ef0b0', 'center', { lw: 5 }); }
+  else txt('İlk oyu sen ver! 👆', 540, fy, 28, '#cfd3f2', 'center', { lw: 5 });
+  txt('Toplam ' + total + ' oy · oylamaya katılan oyuna otomatik girer', 540, 1340, 26, 'rgba(255,255,255,0.75)', 'center', { lw: 5 });
+  if (!NET.open()) txt('⚠️ köprü bağlı değil', 540, 1390, 24, '#ff9a7a', 'center', { lw: 4 });
+}
+function drawChosen() {
+  const g = S.chosen; if (!g) return;
+  const a = S.phaseT, sc = a < 0.5 ? 0.3 + 0.7 * easeOut(a / 0.5) : 1 + Math.sin(a * 4) * 0.03;
+  ctx.save(); ctx.translate(540, 760);
+  ctx.rotate(a * 0.6); ctx.fillStyle = 'rgba(255,210,61,0.18)';
+  for (let i = 0; i < 14; i++) { ctx.rotate(TAU / 14); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-50, -700); ctx.lineTo(50, -700); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+  ctx.save(); ctx.translate(540, 760); ctx.scale(sc, sc);
+  txt(g.ikon, 0, -150, 220, '#fff', 'center', { stroke: false });
+  txt(g.ad, 0, 60, 110, '#ffd23d', 'center', { font: TFONT, lw: 14 });
+  txt('BAŞLIYOR!', 0, 170, 70, '#ffffff', 'center', { font: TFONT, lw: 10 });
+  ctx.restore();
+  txt(g.acik, 540, 1060, 34, '#e7e9ff', 'center', { lw: 6 });
+  const n = S.players.size;
+  if (n) txt('👥 ' + n + ' oyuncu hazır', 540, 1130, 38, '#9ef0b0', 'center', { lw: 6 });
+}
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+  if (S.phase === 'oylama') drawVote();
+  else if (S.phase === 'secildi') drawChosen();
+  drawCaption(1430);
+}
+
+startVote();
+startLoop(update, render);
+
+/* ---------- deneme paneli (?test=1) ---------- */
+if (/[?&]test=1\b/.test(location.search)) (function () {
+  const p = document.createElement('div'); p.id = 'testp';
+  const names = ['Ayşe', 'Mehmet', 'Zeynep', 'Ali', 'Elif', 'Can', 'Deniz', 'Ece', 'Burak', 'Selin'];
+  const send = ev => onTikTok(ev);
+  const anyP = () => { const n = pick(names) + ((Math.random() * 90) | 0); return { user: n.toLowerCase(), nickname: n }; };
+  const btns = [
+    ['🗳️ Rastgele 5 oy', () => { for (let i = 0; i < 5; i++) { const q = anyP(); send({ type: 'chat', ...q, text: String(1 + ((Math.random() * S.options.length) | 0)) }); } }],
+    ['⏩ Oylamayı bitir', () => { if (S.phase === 'oylama') S.voteEnd = S.t; }],
+    ['💬 Yorum', () => send({ type: 'chat', ...anyP(), text: pick(['katıl', 'merhaba', '1', '2', 'kırmızı', 'mavi']) })],
+    ['❤️ 20 beğeni', () => send({ type: 'like', ...anyP(), count: 20 })],
+    ['🎁 Gül', () => send({ type: 'gift', ...anyP(), giftName: 'Gül', diamonds: 1, count: 1 })],
+    ['🎁 Büyük', () => send({ type: 'gift', ...anyP(), giftName: 'Aslan', diamonds: 300, count: 1 })],
+    ['🤖 Kalabalık', () => { if (p.iv) { clearInterval(p.iv); p.iv = null; return; } p.iv = setInterval(() => { const q = anyP(); const r = Math.random(); send(r < 0.5 ? { type: 'like', ...q, count: 1 + ((Math.random() * 15) | 0) } : r < 0.95 ? { type: 'chat', ...q, text: pick(['1', '2', 'katıl', 'kırmızı', 'mavi', 'hadi']) } : { type: 'gift', ...q, giftName: 'Gül', diamonds: 1, count: 1 }); }, 250); }],
+    ['🏁 Oyunu bitir', () => { if (S.phase === 'oyun') startVote(); }]
+  ];
+  for (const [l, f] of btns) { const b = document.createElement('button'); b.textContent = l; b.onclick = f; p.appendChild(b); }
+  document.body.appendChild(p);
+})();
+
+</script>
+</body>
+</html>
