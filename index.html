@@ -329,7 +329,7 @@ function chooseOptions() {
 function startVote() {
   S.phase = 'oylama'; S.phaseT = 0; S.round++;
   S.options = chooseOptions(); S.votes.clear(); S.feed = []; S.players.clear();
-  S.voteStart = S.t; S.voteEnd = S.t + SALON.voteSeconds;
+  S.voteStart = S.t; S.voteEnd = S.t + SALON.voteSeconds; S.pauseUsed = 0;
   frame.style.visibility = 'hidden'; frame.src = 'about:blank'; canvas.style.display = '';
   S.gameReady = false;
   const list = S.options.map((g, i) => (i + 1) + ' ' + g.ad.toLocaleLowerCase('tr')).join(', ');
@@ -343,6 +343,7 @@ function endVote() {
     SPEECH.say('Henüz oy yok! Yoruma 1, 2 ya da 3 yazarak oyunu seçin.', 2);
     return;
   }
+  NET.send({ type: 'oylog', text: 'OYLAMA SONUCU: ' + S.options.map((g, i) => (i + 1) + ' ' + g.ad + '=' + c[i]).join(', ') });
   const max = Math.max(...c), best = c.map((v, i) => (v === max ? i : -1)).filter(i => i >= 0);
   const idx = best[(Math.random() * best.length) | 0];
   S.chosen = S.options[idx]; S.last = S.chosen.id;
@@ -359,10 +360,17 @@ function showGame() {
 }
 
 /* ---------- olaylar ---------- */
+const SAYI_KELIME = { bir: 1, iki: 2, 'üç': 3, uc: 3, 'uç': 3 };
 function matchVote(text) {
-  const t = trLow(text).trim();
-  const m = t.match(/^#?\s*([1-9])(?!\d)/);
-  if (m) { const i = Number(m[1]) - 1; return i < S.options.length ? i : -1; }
+  const t = trLow(text).replace(/\u20e3|\ufe0f/g, '').trim();   // 2️⃣ → 2
+  const ok = i => (i >= 0 && i < S.options.length ? i : -1);
+  // baştaki sayı: "2", "#2", "2 numara", "2!!"
+  let m = t.match(/^#?\s*([1-9])(?!\d)/); if (m) return ok(Number(m[1]) - 1);
+  // kısa mesajın içindeki tek sayı: "ben 2", "oyum 3", "2 diyorum"
+  if (t.length <= 30) { const all = t.match(/(?<!\d)[1-9](?!\d)/g); if (all && new Set(all).size === 1) return ok(Number(all[0]) - 1); }
+  // yazıyla: "iki", "üç"
+  const words = t.split(/[^\p{L}]+/u).filter(Boolean);
+  if (words.length <= 2) for (const w of words) if (SAYI_KELIME[w]) return ok(SAYI_KELIME[w] - 1);   // "bir şey soracağım" oy sayılmasın
   for (let i = 0; i < S.options.length; i++) if (S.options[i].kelime.some(k => t.includes(k))) return i;
   return -1;
 }
@@ -378,6 +386,7 @@ function onTikTok(raw) {
           S.votes.set(e.key, { idx, name: e.name });
           S.feed.unshift({ name: e.name, idx, t: S.t }); if (S.feed.length > 6) S.feed.pop();
           SFX.vote();
+          NET.send({ type: 'oylog', text: e.name + ' → ' + (idx + 1) + ' (' + S.options[idx].ad + ') · yazdı: ' + e.text.slice(0, 40) });
         }
       }
     }
@@ -389,6 +398,7 @@ function onTikTok(raw) {
 function toGame(msg) { try { frame.contentWindow.postMessage({ salon: true, msg }, '*'); } catch (e) { /* sessiz */ } }
 NET.on(m => {
   if (m.type === 'tts') { SPEECH.onTTS(m); toGame(m); return; }
+  if (m.type === 'tiktok') { S.tiktok = m.durum; toGame(m); return; }
   onTikTok(m);
 });
 window.addEventListener('message', ev => {
@@ -409,6 +419,9 @@ window.addEventListener('message', ev => {
 function update(dt) {
   S.t += dt; S.phaseT += dt;
   if (S.phase === 'oylama') {
+    // TikTok bağlantısı yenilenirken oylama süresi durur (o sırada yazılan yorumlar köprüye ulaşmaz)
+    S.paused = (S.tiktok === 'koptu' || S.tiktok === 'bağlanıyor') && (S.pauseUsed || 0) < 60;
+    if (S.paused) { S.voteEnd += dt; S.pauseUsed = (S.pauseUsed || 0) + dt; }
     const left = S.voteEnd - S.t;
     if (left <= 5 && Math.ceil(left) !== Math.ceil(left + dt)) SFX.tick();
     if (left <= 0) endVote();
@@ -488,6 +501,7 @@ function drawVote() {
   else txt('İlk oyu sen ver! 👆', 540, fy, 28, '#cfd3f2', 'center', { lw: 5 });
   txt('Toplam ' + total + ' oy · oylamaya katılan oyuna otomatik girer', 540, 1340, 26, 'rgba(255,255,255,0.75)', 'center', { lw: 5 });
   if (!NET.open()) txt('⚠️ köprü bağlı değil', 540, 1390, 24, '#ff9a7a', 'center', { lw: 4 });
+  if (S.paused) { panel(140, 1150, 800, 84, 20, 'rgba(120,20,20,0.95)', '#ffd23d', 3); txt('📡 Bağlantı yenileniyor · oylama bekliyor', 540, 1192, 32, '#ffffff', 'center', { lw: 5 }); }
 }
 function drawChosen() {
   const g = S.chosen; if (!g) return;
