@@ -159,6 +159,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
+// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
+const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -168,6 +170,7 @@ const SPEECH = (function () {
     if (!text) return;
     if (cat && cooldown && lastCat[cat] != null && now() - lastCat[cat] < cooldown) return;
     if (cat) lastCat[cat] = now();
+    if (!SPIKER_ACIK) { caption = text; captionAt = performance.now(); return; }   // sadece altyazı
     const item = { text, prio: prio || 1 };
     if (queue.length >= 3) {
       let lo = 0; for (let i = 1; i < queue.length; i++) if (queue[i].prio < queue[lo].prio) lo = i;

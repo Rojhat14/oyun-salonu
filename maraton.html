@@ -130,7 +130,8 @@ const CONFIG = {
     likeWindowSeconds: 4, likeFullPerWindow: 40, likeOverflowFactor: 0.3
   },
   speech: {
-    enabled: true, bridge: true, browserFallback: true, volume: 1, readNames: true,
+    // spiker sesi varsayılan kapalı (?spiker=1 açar); kapalıyken cümleler sadece altyazı olur
+    enabled: /[?&]spiker=1\b/.test(location.search), bridge: true, browserFallback: true, volume: 1, readNames: true,
     maxQueue: 3, statusEverySeconds: 16, inviteEverySeconds: 35, greetEverySeconds: 25
   },
   camera: { shotSeconds: 8 },
