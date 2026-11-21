@@ -592,22 +592,27 @@ const camPos = V3(-12, 6, TRACK_W + 14), camLook = V3(0, 1, TRACK_W / 2), _p = V
 const SHOTS = ['side', 'behind', 'front', 'side', 'high'];
 function updateCamera(dt) {
   const l = leader(), D = CFG.distance;
-  let cx = l ? l.x : 0;
-  if (TEAMS.length) { const xs = TEAMS.map(t => t.x).sort((a, b) => b - a); cx = (xs[0] + xs[Math.min(xs.length - 1, 2)]) / 2; }
-  if (G.t > G.cam.until) { G.cam.shot = (G.cam.shot + 1) % SHOTS.length; G.cam.until = G.t + 8; }
+  // kamera her zaman gerçek bir ata kilitlenir (atlar açılınca ortadaki boş piste bakmasın):
+  // her 8 sn'de açı değişir; sırayla lider ve diğer ülkeler gösterilir
+  if (G.t > G.cam.until) { G.cam.shot = (G.cam.shot + 1) % SHOTS.length; G.cam.until = G.t + 8; G.cam.n = (G.cam.n || 0) + 1; }
+  const order = TEAMS.slice().sort((a, b) => b.x - a.x);
+  let star = l;
+  if (order.length > 1 && G.cam.n % 2 === 1) star = order[1 + ((G.cam.n >> 1) % (order.length - 1))];
+  if (G.cam.star !== star) { G.cam.star = star; G.cam.cut = true; }
+  const cx = star ? star.x : 0;
   const f = G.cam.focusUntil > G.t ? G.cam.focus : null;
   let shot = G.phase === 'lobby' ? 'lobby' : G.phase === 'results' ? 'win' : SHOTS[G.cam.shot];
   const zc = TRACK_W / 2;
   if (f && G.phase === 'race') { _p.set(f.x + 4, 4.5, TRACK_W + 6); _l.set(f.x + 1, 1.4, laneZ(f.lane)); }
   else if (shot === 'lobby') { _p.set(-8, 5, zc + 13); _l.set(2, 1.2, zc); }
   else if (shot === 'win' && G.winner) { const a = G.t * 0.4; _p.set(G.winner.x + Math.cos(a) * 7, 3.5, laneZ(G.winner.lane) + Math.sin(a) * 7); _l.set(G.winner.x, 1.6, laneZ(G.winner.lane)); }
-  else if (shot === 'side') { _p.set(cx - 2, 6, zc + 20); _l.set(cx + 2, 1, zc); }
-  else if (shot === 'behind') { _p.set(cx - 16, 7, zc + 2); _l.set(cx + 6, 1, zc); }
-  else if (shot === 'front') { _p.set(Math.min(cx + 16, D + 6), 5, zc - 3); _l.set(cx - 2, 1.2, zc); }
-  else { _p.set(cx - 6, 18, zc + 8); _l.set(cx + 4, 0, zc); }
+  else if (shot === 'side') { _p.set(cx - 2, 6, zc + 20); _l.set(cx + 1, 1, laneZ(star ? star.lane : 0)); }
+  else if (shot === 'behind') { _p.set(cx - 13, 6, zc + 3); _l.set(cx + 1, 1.2, laneZ(star ? star.lane : 0)); }
+  else if (shot === 'front') { const lz = laneZ(star ? star.lane : 0); _p.set(cx + 15, 4.5, lz + 2.5); _l.set(cx - 1, 1.2, lz); }
+  else { _p.set(cx - 5, 15, zc + 11); _l.set(cx, 0.8, laneZ(star ? star.lane : 0)); }
   // pist yönünde (x) tam takip: hızlı atlar kadrajdan kaçmasın; yükseklik/derinlik yumuşak geçsin
   const k = Math.min(1, dt * 2.5);
-  if (camPos.distanceTo(_p) > 40) { camPos.copy(_p); camLook.copy(_l); }
+  if (G.cam.cut || camPos.distanceTo(_p) > 40) { camPos.copy(_p); camLook.copy(_l); G.cam.cut = false; }
   else { camPos.lerp(_p, k); camLook.lerp(_l, k); camPos.x = lerp(camPos.x, _p.x, Math.min(1, dt * 8)); camLook.x = lerp(camLook.x, _l.x, Math.min(1, dt * 8)); }
   camera.position.copy(camPos); camera.lookAt(camLook);
 }
