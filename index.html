@@ -240,8 +240,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -401,7 +401,7 @@ const OYUNLAR = [
   { id: 'maraton', ad: 'MARATON', ikon: '🏃', renk: '#ff8a1a', acik: 'Beğeniyle koş · en arkada kalan elenir', url: 'maraton.html', kelime: ['maraton', 'koşu', 'kosu'] },
   { id: 'halat', ad: 'HALAT ÇEKME', ikon: '💪', renk: '#e53935', acik: 'Kırmızı mı Mavi mi? Takımını seç, çek!', url: 'halat.html', kelime: ['halat', 'çekme', 'cekme'] },
   { id: 'kale', ad: 'KALE SAVAŞI', ikon: '🏰', renk: '#8e5cd9', acik: 'Kaleni seç, ok yağdır, karşı kaleyi yık!', url: 'kale.html', kelime: ['kale', 'savaş', 'savas'] },
-  { id: 'testere', ad: 'TESTERE ARENASI', ikon: '⚙️', renk: '#00acc1', acik: 'Dokun büyü, çarp küçült · son kalan kazanır', url: 'testere.html', kelime: ['testere', 'arena'] },
+  { id: 'testere', ad: 'TESTERE ARENASI', ikon: '⚙️', renk: '#00acc1', acik: 'Büyü, çarp, küçült · son kalan kazanır', url: 'testere.html', kelime: ['testere', 'arena'] },
   { id: 'sehir', ad: 'ŞEHİR SAVAŞLARI', ikon: '🗺️', renk: '#43a047', acik: 'Şehrini yaz, Türkiye haritasını fethet!', url: 'sehir.html', kelime: ['şehir', 'sehir', 'harita'] },
   { id: 'gladyator', ad: 'GLADYATÖR ARENASI', ikon: '⚔️', renk: '#c62828', acik: 'Arenaya in, seviye atla, son ayakta kalan kazanır', url: 'gladyator.html', kelime: ['gladyatör', 'gladyator', 'dövüş', 'dovus'] },
   { id: 'ulke', ad: 'ÜLKE ATLARI', ikon: '🏇', renk: '#1e88e5', acik: 'Ülkeni yaz, beğeniyle atını koştur!', url: 'ulke.html', kelime: ['ülke', 'ulke', 'at yarışı', 'atlar'] },
@@ -447,7 +447,7 @@ function endVote() {
   SPEECH.say((total ? 'Oylama bitti! Kazanan oyun: ' : 'Oy gelmedi, oyunu ben seçtim: ') + S.chosen.ad.toLocaleLowerCase('tr') + '!', 3);
   // oyunu arkada şimdiden yükle
   S.buffer = [];
-  frame.src = S.chosen.url + '?salon=1&r=' + S.round + (SPIKER_ACIK ? '&spiker=1' : '');
+  frame.src = S.chosen.url + '?salon=1&r=' + S.round + (SPIKER_ACIK ? '' : '&spiker=0');
 }
 function showGame() {
   S.phase = 'oyun'; S.phaseT = 0; S.gameStart = S.t;

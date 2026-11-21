@@ -220,8 +220,8 @@ const CONFIG = {
     likeWindowSeconds: 4, likeFullPerWindow: 40, likeOverflowFactor: 0.3
   },
   speech: {
-    // spiker sesi varsayılan kapalı (?spiker=1 açar); kapalıyken cümleler sadece altyazı olur
-    enabled: /[?&]spiker=1\b/.test(location.search), bridge: true, browserFallback: true, volume: 1, readNames: true,
+    // spiker sesi açık (?spiker=0 kapatır; kapalıyken cümleler sadece altyazı olur)
+    enabled: !/[?&]spiker=0\b/.test(location.search), bridge: true, browserFallback: true, volume: 1, readNames: true,
     maxQueue: 3, statusEverySeconds: 16, inviteEverySeconds: 35, greetEverySeconds: 25
   },
   camera: { shotSeconds: 8 },
@@ -815,7 +815,7 @@ function raceCommentary() {
   if (p >= 0.5 && !G.milestones.has('half')) { G.milestones.add('half'); SPEECH.say('Yarı yolu geçtik! Önde ' + speakName(l.raw) + '!', 2); }
   if (D - l.x <= 100 && !G.milestones.has('last')) { G.milestones.add('last'); SPEECH.say('Son yüz metre! Hızlan!', 2); SFX.cheer(0.5); }
   if (second && D - l.x <= 60 && l.x - second.x < 8 && !G.milestones.has('close')) { G.milestones.add('close'); SPEECH.say('Kafa kafaya! ' + speakName(l.raw) + ' ile ' + speakName(second.raw) + '!', 2); }
-  if (G.phaseTime > 8) SPEECH.say('Hatırlatma: ekrana dokundukça koşucun hızlanır, durursan elenirsin!', 1, 'tip', 110);
+  if (G.phaseTime > 8) SPEECH.say('Hatırlatma: en arkada kalan elenir!', 1, 'tip', 110);
   if (G.t - G.lastStatus > CONFIG.speech.statusEverySeconds && !SPEECH.speaking) {
     G.lastStatus = G.t;
     SPEECH.say('Önde ' + speakName(l.raw) + (second ? ', ikinci ' + speakName(second.raw) : '') + '. Bitişe ' + Math.max(0, Math.round((D - l.x) / 10) * 10) + ' metre!', 1, 'status', 8);
@@ -1452,9 +1452,9 @@ function drawFx() {
   ctx.globalAlpha = 1;
 }
 const HINTS = [
-  ['❤️ Ekrana dokun → koşucun HIZLANIR', '#ff5a7a'],
+  ['🏁 İlk 1000 metreyi koşan kazanır', '#ff5a7a'],
   ['💬 Yoruma "katıl" yaz → yarışa gir', '#2f9a4f'],
-  ['⏱️ Dokunmayı bırakan en arkadaki ' + CONFIG.elimination.everySeconds + ' sn\'de elenir', '#d9642a']
+  ['⏱️ En arkadaki ' + CONFIG.elimination.everySeconds + ' sn\'de bir elenir', '#d9642a']
 ];
 function drawHint() {
   if (G.phase === 'results') return;

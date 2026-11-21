@@ -240,8 +240,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -532,7 +532,7 @@ function update(dt) {
     const lead = G.pos < -0.05 ? 0 : G.pos > 0.05 ? 1 : -1;
     if (lead !== G.lastLead && lead >= 0 && G.t - (G.leadSaid || -99) > 8) { G.leadSaid = G.t; SPEECH.say(TEAMS[lead].ad.toLocaleLowerCase('tr') + ' takım öne geçti!', 1, 'lead', 6); }
     G.lastLead = lead;
-    if (G.t - G.lastStatus > 120) { G.lastStatus = G.t; SPEECH.say('Ekrana dokun, takımın çeksin!', 1, 'tip', 110); }
+    if (G.t - G.lastStatus > 120) { G.lastStatus = G.t; SPEECH.say('Halat gerildi! Bakalım hangi takım çekecek!', 1, 'tip', 110); }
     if (G.pos <= -1) endMatch(0); else if (G.pos >= 1) endMatch(1);
     else if (G.t >= G.matchEnd) endMatch(G.pos < 0 ? 0 : G.pos > 0 ? 1 : (r0 >= r1 ? 0 : 1));
     // beğeni yüzen yazıları
@@ -737,7 +737,7 @@ function drawHud() {
   // ipuçları
   const hints = [
     ['💬 1 yaz → 🔴 KIRMIZI   ·   2 yaz → 🔵 MAVİ', '#3949ab'],
-    ['❤️ Ekrana dokun → takımın halatı ÇEKER', '#d81b60'],
+    ['⏱️ Süre bitince bayrak kimdeyse o takım kazanır', '#d81b60'],
     ['🏁 Bayrağı kendi çizgisine çeken kazanır', '#2e7d32']
   ];
   const hi = Math.floor(G.t / 5) % hints.length, [ht, hc] = hints[hi];

@@ -240,8 +240,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -421,7 +421,7 @@ function newRound() {
   G.balls.clear(); G.list = []; G.parts = []; G.floats = []; G.toasts = []; G.toast = null; G.blast = null; G.pairHit.clear();
   const wait = Array.from(G.next.values()); G.next.clear();
   for (const e of wait) addBall(e, true);
-  SPEECH.say('Testere arenası! Katılmak için yorum yaz ya da ekrana dokun!', 3);
+  SPEECH.say('Testere arenası! Katılmak için yorum yaz!', 3);
 }
 function addBall(e, silent) {
   let b = G.balls.get(e.key); if (b) return b;
@@ -553,13 +553,13 @@ function update(dt) {
     G.R = A.r0;
     if (!G.lobbyEnd && G.list.length >= CFG.minPlayers) { G.lobbyEnd = G.t + CFG.lobbySeconds; SPEECH.say(CFG.lobbySeconds + ' saniye sonra testereler dönüyor!', 2); }
     if (G.lobbyEnd) { const l = G.lobbyEnd - G.t; if (l <= 5 && Math.ceil(l) !== Math.ceil(l + dt)) SFX.tick(); }
-    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.lastTip = G.t; SFX.go(); SPEECH.say('Testereler dönüyor! Ekrana dokun, büyü!', 3); }
+    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.lastTip = G.t; SFX.go(); SPEECH.say('Testereler dönüyor! Son kalan kazanır!', 3); }
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'match') {
     const k = clamp(G.phaseT / CFG.matchSeconds, 0, 1);
     G.R = lerp(A.r0, A.r1, Math.pow(k, 1.3));
     const L = alive();
-    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Ekrana dokun, topun büyüsün! Arena daralıyor!', 1, 'tip', 110); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Arena daralıyor! Büyük olan çarpışmayı kazanır!', 1, 'tip', 110); }
     if (L.length <= 1 && G.list.length >= 2) endRound(L[0] || G.list.slice().sort((a, b) => b.outAt - a.outAt)[0]);
     else if (G.t >= G.matchEnd) endRound(L.slice().sort((a, b) => b.power - a.power)[0]);
     if (G.t - (G.flushT || 0) > 1.2) {
@@ -673,7 +673,7 @@ function drawHud() {
     txt('🏆 ŞAMPİYONLAR', 906, py + 22, 20, '#ffd23d', 'center', { stroke: false });
     ch.forEach(([n, w], i) => { setFont(21); txt(fitText(n, 200), 774, py + 56 + i * 30, 21, '#fff', 'left', { stroke: false }); txt(w + '🏆', 1040, py + 56 + i * 30, 21, '#ffd23d', 'right', { stroke: false }); });
   }
-  const hints = [['💬 Yorum yaz ya da ❤️ dokun → ARENAYA GİR', '#2e7d32'], ['❤️ Ekrana dokun → topun BÜYÜR', '#d81b60'], ['⚙️ Büyük olan çarpışmayı kazanır · arena daralıyor!', '#e65100']];
+  const hints = [['💬 Yorum yaz → ARENAYA GİR', '#2e7d32'], ['🏆 Son kalan top kazanır', '#d81b60'], ['⚙️ Büyük olan çarpışmayı kazanır · arena daralıyor!', '#e65100']];
   const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
   panel(24, 1236, 1032, 58, 29, 'rgba(14,18,34,0.88)', hc, 4);
   txt(ht, 540, 1266, 30, '#ffffff', 'center', { lw: 6 });
@@ -690,7 +690,7 @@ function drawLobby() {
     txt(G.list.length + ' oyuncu hazır', 540, 895, 28, '#cfd3f2', 'center', { stroke: false });
   } else {
     txt('ARENAYA GİR!', 540, 750, 54, '#ffd23d', 'center', { font: TFONT, lw: 8 });
-    txt('💬 Yorum yaz ya da ❤️ ekrana dokun', 540, 825, 34, '#ffffff', 'center', { lw: 6 });
+    txt('💬 Yorum yazan arenaya girer', 540, 825, 34, '#ffffff', 'center', { lw: 6 });
     txt('En az ' + CFG.minPlayers + ' oyuncu bekleniyor…', 540, 885, 26, '#cfd3f2', 'center', { stroke: false });
   }
 }

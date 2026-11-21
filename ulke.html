@@ -249,8 +249,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -622,7 +622,7 @@ function update(dt) {
   if (G.phase === 'lobby') {
     if (!G.lobbyEnd && TEAMS.length >= CFG.minCountries) { G.lobbyEnd = G.t + CFG.lobbySeconds; SPEECH.say(CFG.lobbySeconds + ' saniye sonra atlar koşuyor! Ülkeni yazmayı unutma!', 2); }
     if (G.lobbyEnd) { const l = G.lobbyEnd - G.t; if (l <= 5 && Math.ceil(l) !== Math.ceil(l + dt)) SFX.tick(); }
-    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'race'; G.phaseT = 0; G.lastTip = G.t; SFX.go(); SPEECH.say('Ve start! Ekrana dokun, ülkenin atı koşsun!', 3); }
+    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'race'; G.phaseT = 0; G.lastTip = G.t; SFX.go(); SPEECH.say('Ve start! Ülkeler yarışıyor!', 3); }
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'race') {
     for (const T of TEAMS) {
@@ -636,7 +636,7 @@ function update(dt) {
     }
     const l = leader();
     for (const m of [200, 400, 600, 700]) if (l && l.x >= m && !G.milestones.has(m)) { G.milestones.add(m); SPEECH.say(D - m > 100 ? 'Önde ' + l.ad + '! Bitişe ' + (D - m) + ' metre!' : 'Son yüz metre! ' + l.ad + ' önde!', 1, 'ms', 4); }
-    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Ekrana dokun, ülkenin atı hızlansın!', 1, 'tip', 110); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Ülkeni yaz, takımına katıl!', 1, 'tip', 110); }
     if (G.t - (G.flushT || 0) > 1.2) { G.flushT = G.t; for (const T of TEAMS) if (T.likeAcc >= 1) { G.floats.push({ team: T.idx, text: '+' + Math.round(T.likeAcc) + ' m ❤️', born: G.t }); T.likeAcc = 0; } if (G.floats.length > 30) G.floats.splice(0, G.floats.length - 30); }
     if ((G.winner && G.t - G.finishAt > 4) || G.phaseT > CFG.maxRaceSeconds) endRace();
   } else if (G.phase === 'results') {
@@ -758,7 +758,7 @@ function drawHud() {
     for (const T of TEAMS) { const x = 60 + clamp(T.x / D, 0, 1) * 950; txt(T.flag, x, by + 21, 26, '#fff', 'center', { stroke: false }); }
     txt('🏁', 1036, by + 21, 24, '#fff', 'center', { stroke: false });
   }
-  const hints = [['💬 Yoruma ülkeni yaz → ör. türkiye · 🇦🇿 · almanya', '#3949ab'], ['❤️ Ekrana dokun → ülkenin atı HIZLANIR', '#d81b60'], ['🏁 ' + D + ' metre · ilk gelen ülke kazanır', '#2e7d32']];
+  const hints = [['💬 Yoruma ülkeni yaz → ör. türkiye · 🇦🇿 · almanya', '#3949ab'], ['🏇 Atlar ülkelerini temsil ediyor', '#d81b60'], ['🏁 ' + D + ' metre · ilk gelen ülke kazanır', '#2e7d32']];
   const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
   panel(24, 1236, 1032, 58, 29, 'rgba(14,18,34,0.9)', hc, 4);
   txt(ht, 540, 1266, 29, '#ffffff', 'center', { lw: 6 });

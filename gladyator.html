@@ -249,8 +249,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -535,7 +535,7 @@ function newRound() {
   for (const w of G.list) scene.remove(w.m.root);
   G.war.clear(); G.list = []; G.toasts = []; G.toast = null; G.blast = null; G.floats = [];
   const wait = Array.from(G.next.values()); G.next.clear(); for (const e of wait) addWarrior(e, true);
-  SPEECH.say('Gladyatör arenası! Yorum yaz ya da ekrana dokun, arenaya in!', 3);
+  SPEECH.say('Gladyatör arenası! Yorum yazan arenaya iner!', 3);
 }
 const maxHp = w => CFG.hp + (w.level - 1) * CFG.hpPerLevel;
 function addWarrior(e, silent) {
@@ -673,11 +673,11 @@ function update(dt) {
   if (G.phase === 'lobby') {
     if (!G.lobbyEnd && G.list.length >= CFG.minPlayers) { G.lobbyEnd = G.t + CFG.lobbySeconds; SPEECH.say(CFG.lobbySeconds + ' saniye sonra dövüş başlıyor!', 2); }
     if (G.lobbyEnd) { const l = G.lobbyEnd - G.t; if (l <= 5 && Math.ceil(l) !== Math.ceil(l + dt)) SFX.tick(); }
-    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.lastTip = G.t; SFX.go(); SPEECH.say('Dövüş başladı! Ekrana dokun, gladyatörün güçlensin!', 3); }
+    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.lastTip = G.t; SFX.go(); SPEECH.say('Dövüş başladı! Son ayakta kalan kazanır!', 3); }
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'match') {
     const L = alive();
-    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Kalkan, vur ya da iyileş yaz! Ekrana dokun, seviye atla!', 1, 'tip', 110); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Kalkan, vur ya da iyileş yazarak özel hamle yapabilirsiniz!', 1, 'tip', 110); }
     if (L.length <= 1 && G.list.length >= 2) endRound(L[0] || null);
     else if (G.t >= G.matchEnd) endRound(L.slice().sort((a, b) => b.kills - a.kills || b.hp - a.hp)[0]);
     if (G.t - (G.flushT || 0) > 1.2) { G.flushT = G.t; for (const w of L) if (w.likeAcc >= 1) { G.floats.push({ key: w.key, text: '+' + Math.round(w.likeAcc) + ' ⭐', born: G.t }); w.likeAcc = 0; } if (G.floats.length > 40) G.floats.splice(0, G.floats.length - 40); }
@@ -794,7 +794,7 @@ function drawHud() {
     txt('🏆 ŞAMPİYONLAR', 906, py + 22, 20, '#ffd23d', 'center', { stroke: false });
     ch.forEach(([n, w], i) => { setFont(21); txt(fitText(n, 200), 774, py + 56 + i * 30, 21, '#fff', 'left', { stroke: false }); txt(w + '🏆', 1040, py + 56 + i * 30, 21, '#ffd23d', 'right', { stroke: false }); });
   }
-  const hints = [['💬 Yorum yaz ya da ❤️ dokun → ARENAYA İN', '#2e7d32'], ['❤️ Ekrana dokun → SEVİYE atla, güçlen', '#d81b60'], ['💬 kalkan · vur · iyileş yaz → özel hamle', '#3949ab']];
+  const hints = [['💬 Yorum yaz → ARENAYA İN', '#2e7d32'], ['🏆 Son ayakta kalan ya da en çok eleme yapan kazanır', '#d81b60'], ['💬 kalkan · vur · iyileş yaz → özel hamle', '#3949ab']];
   const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
   panel(24, 1236, 1032, 58, 29, 'rgba(14,18,34,0.9)', hc, 4);
   txt(ht, 540, 1266, 30, '#ffffff', 'center', { lw: 6 });
@@ -811,7 +811,7 @@ function drawLobby() {
     txt(G.list.length + ' gladyatör hazır', 540, 1030, 28, '#cfd3f2', 'center', { stroke: false });
   } else {
     txt('ARENAYA İN!', 540, 895, 54, '#ffd23d', 'center', { font: TFONT, lw: 8 });
-    txt('💬 Yorum yaz ya da ❤️ ekrana dokun', 540, 965, 34, '#ffffff', 'center', { lw: 6 });
+    txt('💬 Yorum yazan arenaya iner', 540, 965, 34, '#ffffff', 'center', { lw: 6 });
     txt('En az ' + CFG.minPlayers + ' gladyatör bekleniyor…', 540, 1022, 26, '#cfd3f2', 'center', { stroke: false });
   }
 }

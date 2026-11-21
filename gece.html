@@ -240,8 +240,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -511,12 +511,12 @@ function update(dt) {
   if (G.phase === 'lobby') {
     if (!G.lobbyEnd && G.list.length >= CFG.minPlayers) { G.lobbyEnd = G.t + CFG.lobbySeconds; SPEECH.say(CFG.lobbySeconds + ' saniye sonra ışıklar sönüyor…', 2); }
     if (G.lobbyEnd) { const l = G.lobbyEnd - G.t; if (l <= 5 && Math.ceil(l) !== Math.ceil(l + dt)) SFX.tick(); }
-    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.genNeed = Math.min(CFG.player.genMax, CFG.player.genBase + CFG.player.genPerPlayer * G.list.length); G.lastTip = G.t; SFX.boom(); SPEECH.say('Işıklar söndü! Canavar uyandı! Ekrana dokun, ışık yak!', 3); }
+    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.genNeed = Math.min(CFG.player.genMax, CFG.player.genBase + CFG.player.genPerPlayer * G.list.length); G.lastTip = G.t; SFX.boom(); SPEECH.say('Işıklar söndü! Canavar uyandı! Jeneratörleri onarın ve kaçın!', 3); }
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'match' || G.phase === 'escape') {
     G.light = Math.max(0, G.light - CFG.light.decay * dt);
-    if (G.light <= 0 && G.t - (G.darkSay || -99) > 60) { G.darkSay = G.t; SPEECH.say('Işık söndü! Canavar hızlandı! Ekrana dokun!', 2); }
-    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say(G.phase === 'escape' ? 'Çıkış açık! Kaçın!' : 'Tamir yaz, jeneratörleri onar! Ekrana dokun, ışık yansın!', 1, 'tip', 110); }
+    if (G.light <= 0 && G.t - (G.darkSay || -99) > 60) { G.darkSay = G.t; SPEECH.say('Işık söndü! Canavar hızlandı!', 2); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say(G.phase === 'escape' ? 'Çıkış açık! Kaçın!' : 'Tamir yaz, jeneratörleri onar! Saklan ya da kurtar da yazabilirsiniz!', 1, 'tip', 110); }
     moveMonster(dt);
     if (G.phase === 'match') {
       if (GENS.every(g => g.done)) { G.phase = 'escape'; G.escapeEnd = G.t + CFG.escapeSeconds; G.banner = { text: '🚪 ÇIKIŞ AÇILDI! KAÇIN!', born: G.t }; SFX.win(); SPEECH.say('Bütün jeneratörler çalışıyor! Çıkış açıldı, kaçın!', 3); for (const p of free()) goTo(p, EXIT.x, EXIT.y + rand(-30, 30)); }
@@ -705,7 +705,7 @@ function drawHud() {
   txt('💡 IŞIK ' + Math.round(lf * 100) + '%' + (lf < 0.15 ? ' · CANAVAR HIZLANDI!' : ''), 374, y + 23, 24, '#1a1a2a', 'center', { stroke: false });
   panel(740, y, 316, 44, 22, 'rgba(14,10,18,0.9)', '#90a4ae', 2);
   GENS.forEach((g, i) => { const x = 760 + i * 100; panel(x, y + 12, 84, 20, 10, 'rgba(255,255,255,0.15)'); if (g.p > 0) panel(x, y + 12, Math.max(20, 84 * g.p / G.genNeed), 20, 10, g.done ? '#43a047' : '#90caf9'); });
-  const hints = [['💬 Yoruma "gir" yaz → konağa gir', '#6a1b9a'], ['❤️ Ekrana dokun → IŞIK yanar, canavar yavaşlar', '#d81b60'], ['💬 tamir · saklan · kurtar yaz → özel hamle', '#00695c']];
+  const hints = [['💬 Yoruma "gir" yaz → konağa gir', '#6a1b9a'], ['⚡ 3 jeneratör onarılınca ÇIKIŞ açılır', '#d81b60'], ['💬 tamir · saklan · kurtar yaz → özel hamle', '#00695c']];
   const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
   panel(24, 1236, 1032, 58, 29, 'rgba(14,10,18,0.92)', hc, 4);
   txt(ht, 540, 1266, 29, '#ffffff', 'center', { lw: 6 });
@@ -722,7 +722,7 @@ function drawLobby() {
     txt(G.list.length + ' kişi içeride', 540, 890, 28, '#cfd3f2', 'center', { stroke: false });
   } else {
     txt('YORUMA "GİR" YAZ', 540, 760, 50, '#ff8a80', 'center', { font: TFONT, lw: 8 });
-    txt('ya da ❤️ ekrana dokun', 540, 825, 34, '#ffffff', 'center', { lw: 6 });
+    txt('ve canavardan kaç!', 540, 825, 34, '#ffffff', 'center', { lw: 6 });
     txt('En az ' + CFG.minPlayers + ' kişi bekleniyor…', 540, 882, 26, '#cfd3f2', 'center', { stroke: false });
   }
 }

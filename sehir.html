@@ -240,8 +240,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -574,11 +574,11 @@ function update(dt) {
   if (G.phase === 'lobby') {
     if (!G.lobbyEnd && TEAM.length >= CFG.minCities) { G.lobbyEnd = G.t + CFG.lobbySeconds; SPEECH.say(CFG.lobbySeconds + ' saniye sonra savaş başlıyor! Şehrini yazmayı unutma!', 2); }
     if (G.lobbyEnd) { const l = G.lobbyEnd - G.t; if (l <= 5 && Math.ceil(l) !== Math.ceil(l + dt)) SFX.tick(); }
-    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.lastTip = G.t; SFX.go(); SPEECH.say('Savaş başladı! Ekrana dokun, şehrin büyüsün!', 3); }
+    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.lastTip = G.t; SFX.go(); SPEECH.say('Savaş başladı! En çok ili alan şehir kazanır!', 3); }
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'match') {
     G.tickT += dt; if (G.tickT >= 1) { G.tickT = 0; conquestTick(); }
-    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Şehrini yaz, ekrana dokun! En çok ili alan kazanır!', 1, 'tip', 110); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Şehrini yaz, ordusuna katıl! En çok ili alan kazanır!', 1, 'tip', 110); }
     if (G.t >= G.matchEnd) endRound();
   } else if (G.phase === 'results') {
     if (G.phaseT > 1 && Math.random() < 0.3) confetti(3);
@@ -652,7 +652,7 @@ function drawHud() {
     });
   }
   // ipucu
-  const hints = [['💬 Yoruma şehrini yaz → ör. istanbul · 34 · antep', '#3949ab'], ['❤️ Ekrana dokun → şehrin komşu illeri FETHEDER', '#d81b60'], ['🏆 Süre bitince en çok ili olan şehir kazanır', '#2e7d32']];
+  const hints = [['💬 Yoruma şehrini yaz → ör. istanbul · 34 · antep', '#3949ab'], ['🗺️ Şehirler komşu illeri FETHEDER', '#d81b60'], ['🏆 Süre bitince en çok ili olan şehir kazanır', '#2e7d32']];
   const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
   panel(24, 1236, 1032, 58, 29, 'rgba(14,18,34,0.9)', hc, 4);
   txt(ht, 540, 1266, 29, '#ffffff', 'center', { lw: 6 });

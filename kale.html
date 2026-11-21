@@ -240,8 +240,8 @@ function normEvent(ev) {
 const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
 
 /* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
-// Spiker sesi varsayılan KAPALI (yayıncı kendisi konuşuyor); açmak için adrese ?spiker=1
-const SPIKER_ACIK = /[?&]spiker=1\b/.test(location.search);
+// Spiker sesi açık; kapatmak için adrese ?spiker=0 (o zaman sadece altyazı)
+const SPIKER_ACIK = !/[?&]spiker=0\b/.test(location.search);
 const SPEECH = (function () {
   const queue = [], waiting = new Map(), lastCat = {};
   let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
@@ -578,7 +578,7 @@ function update(dt) {
         for (let i = 0; i < n; i++) fire(t, 'arrow', pend / n);
       }
     }
-    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Ekrana dokun, kalen ok yağdırsın!', 1, 'tip', 110); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Kaleler sallanıyor! Bakalım hangisi dayanacak!', 1, 'tip', 110); }
     if (G.t - (G.flushT || 0) > 1.2) {
       G.flushT = G.t;
       for (const p of G.players.values()) if (p.likeAcc >= 1) { G.floats.push({ team: p.team, text: '+' + Math.round(p.likeAcc) + ' 🏹', name: p.name, born: G.t }); p.likeAcc = 0; }
@@ -740,7 +740,7 @@ function drawHud() {
     setFont(24); txt(fitText(f.name, 160) + ' ' + f.text, T.x + (f.team ? -20 : 20), 740 - age * 50 - (i % 3) * 30, 24, '#ffffff', 'center', { lw: 6, sc: T.koyu });
     ctx.globalAlpha = 1;
   }
-  const hints = [['💬 1 yaz → 🔴 KIRMIZI   ·   2 yaz → 🔵 MAVİ', '#3949ab'], ['❤️ Ekrana dokun → kalen OK YAĞDIRIR', '#d81b60'], ['💬 Yorum yaz → adınla GÜLLE atılır', '#2e7d32']];
+  const hints = [['💬 1 yaz → 🔴 KIRMIZI   ·   2 yaz → 🔵 MAVİ', '#3949ab'], ['🏰 Karşı kaleyi ilk yıkan takım kazanır', '#d81b60'], ['💬 Yorum yaz → adınla GÜLLE atılır', '#2e7d32']];
   const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
   panel(24, 1206, 1032, 62, 31, 'rgba(14,18,34,0.88)', hc, 4);
   txt(ht, 540, 1238, 32, '#ffffff', 'center', { lw: 6 });
