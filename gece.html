@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gece Yarısı</title>
+<style>
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+body { display: flex; align-items: center; justify-content: center; }
+#game { display: block; position: relative; z-index: 2; }
+#oyun { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 1; visibility: hidden; background: #000; }
+#testp { position: fixed; right: 8px; top: 8px; z-index: 9; display: flex; flex-direction: column; gap: 4px; }
+#testp button { font: 13px sans-serif; padding: 6px 10px; border-radius: 6px; border: 0; background: #2d2f55; color: #fff; cursor: pointer; text-align: left; }
+</style>
+</head>
+<body>
+
+<canvas id="game" width="1080" height="1920"></canvas>
+<script>
+/* =====================================================================
+   NET – oyunun dış dünyayla bağlantısı.
+   • Tek başına açılırsa köprüye (ws://localhost:8080) bağlanır.
+   • Oyun Salonu'nun içinde (iframe, ?salon=1) açılırsa olayları salondan alır,
+     spiker isteklerini ve "oyun bitti" haberini salona gönderir.
+   Kullanım: NET.on(m => …)  NET.send({type:'say',…})  NET.open()  NET.finish({…})
+   ===================================================================== */
+const NET = (function () {
+  const embedded = window.parent !== window && /[?&]salon=1\b/.test(location.search);
+  const handlers = [];
+  let ws = null, status = embedded ? 'salon' : 'bağlı değil', readySent = false;
+  const emit = m => { for (const h of handlers) { try { h(m); } catch (e) { console.error(e); } } };
+  function screenInfo() { return { type: 'ekran', w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1, ua: navigator.userAgent.slice(0, 160) }; }
+  function wsUrl() {
+    if (location.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return 'ws://' + location.host + '/ws';
+    return 'ws://localhost:8080';
+  }
+  function connect() {
+    let s;
+    try { s = new WebSocket(wsUrl()); } catch (e) { setTimeout(connect, 4000); return; }
+    ws = s;
+    s.onopen = () => { status = 'bağlı'; send(screenInfo()); };
+    s.onmessage = m => { try { const d = JSON.parse(m.data); for (const x of Array.isArray(d) ? d : [d]) if (x) emit(x); } catch (e) { /* bozuk */ } };
+    s.onerror = () => {};
+    s.onclose = () => { status = 'bağlı değil'; if (ws === s) ws = null; setTimeout(connect, 4000); };
+  }
+  function send(o) {
+    if (embedded) { try { window.parent.postMessage({ salonOyun: true, msg: o }, '*'); } catch (e) { /* sessiz */ } return; }
+    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch (e) { /* sessiz */ } }
+  }
+  if (embedded) {
+    window.addEventListener('message', ev => {
+      if (ev.source !== window.parent) return;
+      const d = ev.data; if (d && d.salon && d.msg) emit(d.msg);
+    });
+  } else if (!/[?&]baglanti=0\b/.test(location.search)) setTimeout(connect, 0);
+  return {
+    embedded,
+    on(fn) { handlers.push(fn); },
+    send,
+    open() { return embedded || (!!ws && ws.readyState === 1); },
+    get status() { return status; },
+    // oyun hazır: salon bekleyen oyuncuları gönderir
+    ready() { if (embedded && !readySent) { readySent = true; send({ type: 'hazir' }); } },
+    // oyun bitti: salon oylamaya döner
+    finish(summary) { if (embedded) send(Object.assign({ type: 'bitti' }, summary || {})); }
+  };
+})();
+
+</script>
+<script>
+/* =====================================================================
+   ORTAK – salon ve 2D oyunların paylaştığı araçlar
+   (çizim yardımcıları, ekran ölçekleme, spiker, ses efektleri, olay biçimi)
+   Gerekli: net.js önce yüklenmiş olmalı. Sayfada <canvas id="game"> bulunmalı.
+   ===================================================================== */
+'use strict';
+const W = 1080, H = 1920;
+const SAFE_TOP = 222, SAFE_BOTTOM = 1300;      // TikTok uygulamasında üst ~215 px ve alttaki yorumlar kapanır
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let RS = 1;
+function fit() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const cw = Math.floor(W * s), ch = Math.floor(H * s);
+  canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+  RS = Math.round(Math.min(2, Math.max(1, cw * (window.devicePixelRatio || 1) / W)) * 4) / 4;
+  if (canvas.width !== Math.round(W * RS)) { canvas.width = Math.round(W * RS); canvas.height = Math.round(H * RS); }
+}
+window.addEventListener('resize', fit); fit();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[(Math.random() * a.length) | 0];
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const TAU = Math.PI * 2;
+const FONT = '"Segoe UI", "Trebuchet MS", Tahoma, sans-serif';
+const TFONT = 'Georgia, "Palatino Linotype", "Times New Roman", serif';
+const fmt = n => Math.round(n).toLocaleString('tr-TR');
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function rrPath(g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  g.beginPath(); g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+function setFont(size, o) { ctx.font = ((o && o.weight) || 'bold') + ' ' + size + 'px ' + ((o && o.font) || FONT); }
+function txt(s, x, y, size, color, align, o) {
+  o = o || {};
+  setFont(size, o);
+  ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  if (o.stroke !== false) { ctx.lineJoin = 'round'; ctx.lineWidth = o.lw || Math.max(3, size / 6); ctx.strokeStyle = o.sc || 'rgba(8,10,18,0.9)'; ctx.strokeText(s, x, y); }
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function fitText(s, maxW) {
+  if (ctx.measureText(s).width <= maxW) return s;
+  const a = Array.from(s);
+  while (a.length > 1 && ctx.measureText(a.join('') + '…').width > maxW) a.pop();
+  return a.join('') + '…';
+}
+function panel(x, y, w, h, r, fill, stroke, lw) {
+  rrPath(ctx, x, y, w, h, r); ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 3; ctx.stroke(); }
+}
+function cleanName(n, max) {
+  n = String(n == null ? '' : n).replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim();
+  if (!n) n = 'Anonim';
+  const a = Array.from(n);
+  return a.length > max ? a.slice(0, max).join('') + '…' : n;
+}
+const BANNED_WORDS = ['amk', 'aq', 'orospu', 'piç', 'pic', 'sik', 'yarrak', 'göt', 'got', 'ibne', 'pezevenk', 'kahpe', 'siktir', 'amın', 'amin', 'gavat', 'sürtük', 'mal', 'salak', 'aptal', 'fuck', 'shit', 'bitch', 'porn', 'sex', 'seks'];
+function speakName(raw) {
+  let s = String(raw || '').normalize('NFC').replace(/[_.\-]+/g, ' ').replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+  s = Array.from(s).slice(0, 20).join('').trim();
+  if (!s || !/\p{L}/u.test(s)) return 'bir izleyici';
+  const low = s.toLocaleLowerCase('tr'), words = low.split(' ');
+  for (const b of BANNED_WORDS) if (b.length <= 3 ? words.includes(b) : low.includes(b)) return 'bir izleyici';
+  return s;
+}
+// köprüden gelen olayı tek biçime çevirir
+function normEvent(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  const type = String(ev.type || '').toLowerCase();
+  if (!['chat', 'like', 'gift', 'follow', 'share', 'member'].includes(type)) return null;
+  const key = String(ev.user || ev.nickname || 'anonim').slice(0, 80);
+  const raw = String(ev.nickname || ev.user || 'Anonim');
+  return { type, key, raw, name: cleanName(raw, 16), text: String(ev.text || '').slice(0, 200),
+    count: Math.max(1, Math.min(Math.floor(Number(ev.count) || 1), 100000)), diamonds: Math.max(0, Math.floor(Number(ev.diamonds) || 0)) };
+}
+const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
+
+/* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
+const SPEECH = (function () {
+  const queue = [], waiting = new Map(), lastCat = {};
+  let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
+  const now = () => performance.now() / 1000;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  function say(text, prio, cat, cooldown) {
+    if (!text) return;
+    if (cat && cooldown && lastCat[cat] != null && now() - lastCat[cat] < cooldown) return;
+    if (cat) lastCat[cat] = now();
+    const item = { text, prio: prio || 1 };
+    if (queue.length >= 3) {
+      let lo = 0; for (let i = 1; i < queue.length; i++) if (queue[i].prio < queue[lo].prio) lo = i;
+      if (queue[lo].prio >= item.prio) return;
+      queue.splice(lo, 1);
+    }
+    let i = queue.findIndex(q => q.prio < item.prio); if (i < 0) i = queue.length;
+    queue.splice(i, 0, item); pump();
+  }
+  function pump() {
+    if (busy || !queue.length) return;
+    const it = queue.shift(); busy = true; caption = it.text; captionAt = performance.now();
+    play(it.text).then(() => { busy = false; setTimeout(pump, 250); });
+  }
+  async function play(text) {
+    if (NET.open()) { const b64 = await request(text); if (b64 && await playWav(b64)) return; }
+    if ('speechSynthesis' in window) { await browserSay(text); return; }
+    await wait(Math.min(5000, 1200 + text.length * 55));
+  }
+  function request(text) {
+    return new Promise(res => {
+      const id = ++reqId, to = setTimeout(() => { waiting.delete(id); res(null); }, 6000);
+      waiting.set(id, b64 => { clearTimeout(to); res(b64); });
+      NET.send({ type: 'say', id, text });
+    });
+  }
+  function onTTS(m) { const f = waiting.get(m.id); if (f) { waiting.delete(m.id); f(m.audio || null); } }
+  function playWav(b64) {
+    return new Promise(res => {
+      try {
+        const bin = atob(b64), u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const url = URL.createObjectURL(new Blob([u8], { type: 'audio/wav' }));
+        const a = new Audio(url);
+        let done = false; const fin = okk => { if (done) return; done = true; URL.revokeObjectURL(url); res(okk); };
+        a.onended = () => fin(true); a.onerror = () => fin(false); setTimeout(() => fin(true), 15000);
+        a.play().catch(() => fin(false));
+      } catch (e) { res(false); }
+    });
+  }
+  function browserSay(text) {
+    return new Promise(res => {
+      try {
+        const u = new SpeechSynthesisUtterance(text); u.lang = 'tr-TR'; u.rate = 1.08;
+        const v = speechSynthesis.getVoices().find(x => /^tr/i.test(x.lang)); if (v) u.voice = v;
+        let done = false; const fin = () => { if (!done) { done = true; res(); } };
+        u.onend = fin; u.onerror = fin; setTimeout(fin, 12000); speechSynthesis.speak(u);
+      } catch (e) { res(); }
+    });
+  }
+  return { say, onTTS, get speaking() { return busy; }, get caption() { return caption; }, get captionAge() { return (performance.now() - captionAt) / 1000; }, clear() { queue.length = 0; } };
+})();
+
+/* ---------- Ses efektleri (dosyasız, telifsiz) ---------- */
+const SFX = (function () {
+  let ac = null, master = null;
+  function A() {
+    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination); } catch (e) { return null; } }
+    if (ac.state === 'suspended') ac.resume().catch(() => {});
+    return ac;
+  }
+  function tone(f, d, type, vol, slide, delay) {
+    const a = A(); if (!a) return;
+    const t = a.currentTime + (delay || 0), o = a.createOscillator(), g = a.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f * slide), t + d);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.05);
+  }
+  function noise(d, vol, hp) {
+    const a = A(); if (!a) return;
+    const b = a.createBuffer(1, Math.floor(a.sampleRate * d), a.sampleRate), ch = b.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / ch.length);
+    const s = a.createBufferSource(), g = a.createGain(), f = a.createBiquadFilter();
+    f.type = 'highpass'; f.frequency.value = hp || 600; s.buffer = b; g.gain.value = vol || 0.15;
+    s.connect(f); f.connect(g); g.connect(master); s.start();
+  }
+  return {
+    join() { tone(660, 0.12, 'triangle', 0.15); tone(990, 0.15, 'triangle', 0.12, 1, 0.08); },
+    vote() { tone(880, 0.08, 'square', 0.06); },
+    tick() { tone(1200, 0.05, 'square', 0.05); },
+    go() { tone(523, 0.18, 'triangle', 0.2); tone(659, 0.18, 'triangle', 0.2, 1, 0.15); tone(784, 0.35, 'triangle', 0.22, 1, 0.3); },
+    thanks() { tone(784, 0.15, 'sine', 0.18); tone(1046, 0.25, 'sine', 0.18, 1, 0.12); tone(1318, 0.3, 'sine', 0.15, 1, 0.24); },
+    pull() { tone(140, 0.12, 'sawtooth', 0.05, 0.7); },
+    cheer() { noise(1.2, 0.12, 900); },
+    win() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => tone(f, 0.28, 'triangle', 0.2, 1, i * 0.16)); noise(1.6, 0.1, 1200); },
+    boom() { tone(90, 0.5, 'sawtooth', 0.25, 0.4); noise(0.5, 0.2, 200); }
+  };
+})();
+window.addEventListener('pointerdown', () => SFX.vote(), { once: true });
+
+/* ---------- Konfeti ---------- */
+const CONFETTI = [];
+function confetti(n, x, y) {
+  for (let i = 0; i < n; i++) CONFETTI.push({ x: x == null ? rand(0, W) : x, y: y == null ? rand(-200, 0) : y, vx: rand(-200, 200), vy: rand(-300, 200), g: 500, rot: rand(0, TAU), vr: rand(-8, 8), size: rand(12, 22), life: rand(2, 3.5), color: pick(['#ffd23d', '#ff5a7a', '#4fc3f7', '#7ee081', '#ffffff', '#ff9f1a']) });
+  if (CONFETTI.length > 600) CONFETTI.splice(0, CONFETTI.length - 600);
+}
+function updConfetti(dt) {
+  for (let i = CONFETTI.length - 1; i >= 0; i--) {
+    const p = CONFETTI[i]; p.life -= dt; if (p.life <= 0) { CONFETTI.splice(i, 1); continue; }
+    p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+  }
+}
+function drawConfetti() {
+  for (const p of CONFETTI) { ctx.save(); ctx.globalAlpha = clamp(p.life, 0, 1); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2); ctx.restore(); }
+}
+
+/* ---------- Spiker altyazısı (üst bilgi şeridi) ---------- */
+function drawCaption(y) {
+  const c = SPEECH.caption; if (!c || SPEECH.captionAge > 7) return;
+  const a = clamp(7 - SPEECH.captionAge, 0, 1);
+  ctx.save(); ctx.globalAlpha = a;
+  panel(24, y, 1032, 56, 14, 'rgba(14,18,34,0.85)', 'rgba(255,210,61,0.7)', 2);
+  setFont(26); txt('🎙️ ' + fitText(c, 960), 44, y + 29, 26, '#ffffff', 'left', { stroke: false });
+  ctx.restore();
+}
+
+/* ---------- Ana döngü ---------- */
+function startLoop(update, render) {
+  let last = performance.now();
+  function frame(ts) {
+    const dt = clamp((ts - last) / 1000, 0, 0.05); last = ts;
+    try { update(dt); updConfetti(dt); ctx.setTransform(RS, 0, 0, RS, 0, 0); render(); drawConfetti(); } catch (e) { console.error(e); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+</script>
+<script>
+/* =====================================================================
+   GECE YARISI – karanlık konakta canavardan kaçış (kendi tasarımımız)
+   Katılım: yoruma "gir" (ya da herhangi bir yorum / beğeni).
+   Beğeni → IŞIK. Işık yüksekken canavar yavaş, fenerler geniş; ışık sönerse canavar hızlanır.
+   Komutlar: "tamir" (jeneratöre koş, hızlı onar), "saklan" (4 sn görünmez), "kurtar" (yakalanan birini kurtar).
+   Üç jeneratör onarılınca çıkış açılır → kaçan insanlar kazanır. Süre biterse ya da herkes
+   yakalanırsa canavar kazanır. Hediye → IŞIK PATLAMASI (canavar sersemler, efekt).
+   ===================================================================== */
+const CFG = {
+  lobbySeconds: NET.embedded ? 20 : 30, matchSeconds: 180, escapeSeconds: 15, resultsSeconds: 14, minPlayers: 2,
+  light: { max: 100, start: 60, decay: 2.2, like: 0.35, chat: 1, follow: 8, share: 10 },
+  monster: { speed: 95, darkBonus: 0.7, lightSlow: 0.45, catchR: 24, stunGift: 4 },
+  player: { speed: 70, repairRate: 1.2, repairBoost: 3, genBase: 60, genPerPlayer: 12, genMax: 600 },
+  cmd: { tamir: 10, saklan: 15, kurtar: 20 },
+  likeWindow: 4, likeFull: 40, likeOverflow: 0.3, lateJoinUntil: 0.6, maxLobbyWait: 150
+};
+const MAP = { x: 30, y: 430, w: 1020, h: 720, cols: 3, rows: 3 };
+const RW = MAP.w / MAP.cols, RH = MAP.h / MAP.rows;
+const ROOM_NAMES = ['Kütüphane', 'Salon', 'Yatak Odası', 'Mutfak', 'Hol', 'Çalışma Odası', 'Bodrum', 'Yemek Odası', 'Kiler'];
+const ROOMS = [];
+for (let r = 0; r < MAP.rows; r++) for (let c = 0; c < MAP.cols; c++) ROOMS.push({ i: ROOMS.length, c, r, x: MAP.x + c * RW, y: MAP.y + r * RH, cx: MAP.x + c * RW + RW / 2, cy: MAP.y + r * RH + RH / 2, name: ROOM_NAMES[ROOMS.length], nb: [] });
+// kapılar: komşu odalar arasında
+const DOORS = [];
+for (const a of ROOMS) for (const b of ROOMS) if (b.i > a.i && Math.abs(a.c - b.c) + Math.abs(a.r - b.r) === 1) {
+  const d = { a: a.i, b: b.i, x: (a.cx + b.cx) / 2, y: (a.cy + b.cy) / 2, vertical: a.r === b.r };
+  DOORS.push(d); a.nb.push({ room: b.i, door: d }); b.nb.push({ room: a.i, door: d });
+}
+const GENS = [{ room: 0, fx: 0.25, fy: 0.3 }, { room: 5, fx: 0.7, fy: 0.65 }, { room: 6, fx: 0.3, fy: 0.7 }].map(g => { const R = ROOMS[g.room]; return { room: g.room, x: R.x + RW * g.fx, y: R.y + RH * g.fy, p: 0, done: false }; });
+const EXIT = { room: 8, x: ROOMS[8].x + RW - 40, y: ROOMS[8].cy };
+const CAGE = { room: 2, x: ROOMS[2].x + RW * 0.7, y: ROOMS[2].y + RH * 0.35 };
+const roomAt = (x, y) => { const c = clamp(Math.floor((x - MAP.x) / RW), 0, MAP.cols - 1), r = clamp(Math.floor((y - MAP.y) / RH), 0, MAP.rows - 1); return r * MAP.cols + c; };
+function path(from, to) {   // odalar arası en kısa yol (BFS) → kapı noktaları + hedef
+  if (from === to) return [];
+  const prev = new Map([[from, null]]), q = [from];
+  while (q.length) { const r = q.shift(); if (r === to) break; for (const n of ROOMS[r].nb) if (!prev.has(n.room)) { prev.set(n.room, { r, door: n.door }); q.push(n.room); } }
+  const pts = []; let cur = to;
+  while (prev.get(cur)) { const p = prev.get(cur); pts.unshift({ x: p.door.x, y: p.door.y }); cur = p.r; }
+  return pts;
+}
+const COLORS = ['#ff8a80', '#82b1ff', '#b9f6ca', '#ffe57f', '#ea80fc', '#ffd180', '#84ffff', '#f48fb1', '#c5cae9', '#bcaaa4'];
+const STORE = (function () {
+  const K = 'gece-yarisi-v1'; let d = { insan: 0, canavar: 0, gece: 0 };
+  try { const r = JSON.parse(localStorage.getItem(K) || 'null'); if (r && r.gece != null) d = r; } catch (e) { /* yok */ }
+  const save = () => { try { localStorage.setItem(K, JSON.stringify(d)); } catch (e) { /* sessiz */ } };
+  return { get: () => d, add(k) { d[k]++; save(); }, next() { d.gece++; save(); return d.gece; } };
+})();
+
+const G = { genNeed: 100, t: 0, phase: 'lobby', phaseT: 0, lobbyEnd: 0, matchEnd: 0, escapeEnd: 0, night: 0, light: CFG.light.start, players: new Map(), list: [], next: new Map(),
+  mon: { x: EXIT.x - 60, y: ROOMS[4].cy, path: [], target: null, stunUntil: 0, retarget: 0 }, toasts: [], toast: null, blast: null, ticker: [], floats: [],
+  result: null, likeB: new Map(), finSent: false, lastTip: 0, flash: 0, banner: null };
+function newNight() {
+  G.night = STORE.next(); G.phase = 'lobby'; G.phaseT = 0; G.lobbyEnd = 0; G.result = null; G.finSent = false; G.light = CFG.light.start;
+  G.players.clear(); G.list = []; G.toasts = []; G.toast = null; G.blast = null; G.floats = []; G.banner = null;
+  for (const g of GENS) { g.p = 0; g.done = false; }
+  Object.assign(G.mon, { x: ROOMS[8].cx, y: ROOMS[8].cy, path: [], target: null, stunUntil: 0, retarget: 0 });
+  const wait = Array.from(G.next.values()); G.next.clear(); for (const e of wait) addPlayer(e, true);
+  SPEECH.say('Gece yarısı… Konağa girmek için yoruma gir yaz!', 3);
+}
+function addPlayer(e, silent) {
+  let p = G.players.get(e.key); if (p) return p;
+  const h = hash(e.key), R = ROOMS[4];
+  p = { key: e.key, raw: e.raw, name: e.name, color: COLORS[h % COLORS.length], x: R.cx + rand(-80, 80), y: R.cy + rand(-50, 50), path: [], goal: null, mode: 'wander',
+    alive: true, caged: false, hideUntil: 0, cd: {}, repaired: 0, rescued: 0, escaped: false, ph: rand(0, TAU), wait: rand(0, 2) };
+  G.players.set(e.key, p); G.list.push(p);
+  if (!silent) { toastPush({ kind: 'join', name: e.name, color: p.color }); SFX.join(); }
+  return p;
+}
+function ensurePlayer(e) {
+  const p = G.players.get(e.key); if (p) return p;
+  if (G.phase === 'lobby') return addPlayer(e);
+  if (G.phase === 'match' && G.phaseT < CFG.matchSeconds * CFG.lateJoinUntil) return addPlayer(e);
+  if (!G.next.has(e.key)) { G.next.set(e.key, e); ticker('⏭️ ' + e.name + ' sıradaki geceye yazıldı'); }
+  return null;
+}
+const free = () => G.list.filter(p => p.alive && !p.caged && !p.escaped);
+function addLight(u) { if (G.phase === 'results') return; G.light = clamp(G.light + u, 0, CFG.light.max); }
+function ticker(s) { G.ticker.push({ s, t: G.t }); if (G.ticker.length > 6) G.ticker.shift(); }
+function toastPush(o) { if (o.kind === 'gift') G.toasts.unshift(o); else G.toasts.push(o); if (G.toasts.length > 20) G.toasts.length = 20; }
+const norm = s => trLow(s).replace(/ç/g, 'c').replace(/ğ/g, 'g').replace(/ı/g, 'i').replace(/ö/g, 'o').replace(/ş/g, 's').replace(/ü/g, 'u');
+function goTo(p, x, y) { p.path = path(roomAt(p.x, p.y), roomAt(x, y)); p.path.push({ x, y }); }
+function useCmd(p, name, fn) { const last = p.cd[name] || -99; if (G.t - last < CFG.cmd[name]) return false; p.cd[name] = G.t; fn(); return true; }
+
+function onEvent(raw) {
+  if (raw.type === 'oyuncular') {
+    const names = [];
+    for (const q of Array.isArray(raw.list) ? raw.list : []) { const e = normEvent({ type: 'chat', user: q.user, nickname: q.nickname }); if (e && !G.players.has(e.key) && G.phase === 'lobby') { addPlayer(e, true); names.push(e.name); } }
+    if (names.length) toastPush({ kind: 'group', title: '+' + names.length + ' KİŞİ KONAKTA', names });
+    return;
+  }
+  const e = normEvent(raw); if (!e) return;
+  const p = ensurePlayer(e); if (!p) return;
+  const L = CFG.light;
+  if (e.type === 'chat') {
+    const t = norm(e.text);
+    if (G.phase === 'match' && p.alive && !p.caged && !p.escaped) {
+      if (/\btamir\b|\bonar/.test(t)) useCmd(p, 'tamir', () => { const g = GENS.filter(g => !g.done).sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y))[0]; if (g) { p.mode = 'repair'; p.goal = g; goTo(p, g.x + rand(-20, 20), g.y + rand(-14, 14)); p.boostUntil = G.t + 8; G.floats.push({ key: p.key, text: '🔧 TAMİR', born: G.t }); } });
+      else if (/\bsaklan/.test(t)) useCmd(p, 'saklan', () => { p.hideUntil = G.t + 4; G.floats.push({ key: p.key, text: '🫥 SAKLANDI', born: G.t }); });
+      else if (/\bkurtar/.test(t)) useCmd(p, 'kurtar', () => rescue(p));
+    }
+    addLight(L.chat);
+    if (/nas[ıi]l|ne yap|kural|oynan/i.test(e.text) && G.t - (G.helpT || -99) > 25) { G.helpT = G.t; SPEECH.say('Ekrana dokun, ışık yansın! Tamir yaz, jeneratörleri onar ve kaç!', 2); }
+  } else if (e.type === 'like') {
+    const b = G.likeB.get(e.key) || { t: G.t, n: 0 };
+    if (G.t - b.t > CFG.likeWindow) { b.t = G.t; b.n = 0; }
+    const full = Math.max(0, Math.min(e.count, CFG.likeFull - b.n)); b.n += e.count; G.likeB.set(e.key, b);
+    addLight((full + (e.count - full) * CFG.likeOverflow) * L.like);
+  } else if (e.type === 'gift') {
+    addLight(CFG.light.max);
+    if (G.phase === 'match') { G.mon.stunUntil = Math.max(G.mon.stunUntil, G.t) + CFG.monster.stunGift; G.flash = 0.6; }
+    if (G.t - (p.lastGift || -99) > 4) {
+      p.lastGift = G.t; G.blast = { name: e.name, born: G.t };
+      toastPush({ kind: 'gift', name: e.name, color: p.color }); SFX.thanks(); SFX.boom();
+      SPEECH.say(speakName(e.raw) + ', çok teşekkürler!', 2, 'gift', 3);
+    }
+  } else if (e.type === 'follow') { addLight(L.follow); ticker('➕ ' + e.name + ' takip etti!'); }
+  else if (e.type === 'share') { addLight(L.share); ticker('📣 ' + e.name + ' paylaştı!'); }
+}
+function rescue(by) {
+  const c = G.list.find(p => p.caged); if (!c) { G.floats.push({ key: by.key, text: 'kafeste kimse yok', born: G.t }); return; }
+  c.caged = false; c.x = CAGE.x; c.y = CAGE.y + 40; c.path = []; c.mode = 'wander'; c.hideUntil = G.t + 3; by.rescued++;
+  ticker('🗝️ ' + by.name + ', ' + c.name + ' adlı kişiyi kafesten kurtardı!'); SFX.join();
+}
+NET.on(m => { if (m.type === 'tts') SPEECH.onTTS(m); else onEvent(m); });
+
+/* ---------- güncelleme ---------- */
+function update(dt) {
+  G.t += dt; G.phaseT += dt; G.flash = Math.max(0, G.flash - dt);
+  if (G.phase === 'lobby') {
+    if (!G.lobbyEnd && G.list.length >= CFG.minPlayers) { G.lobbyEnd = G.t + CFG.lobbySeconds; SPEECH.say(CFG.lobbySeconds + ' saniye sonra ışıklar sönüyor…', 2); }
+    if (G.lobbyEnd) { const l = G.lobbyEnd - G.t; if (l <= 5 && Math.ceil(l) !== Math.ceil(l + dt)) SFX.tick(); }
+    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.genNeed = Math.min(CFG.player.genMax, CFG.player.genBase + CFG.player.genPerPlayer * G.list.length); G.lastTip = G.t; SFX.boom(); SPEECH.say('Işıklar söndü! Canavar uyandı! Ekrana dokun, ışık yak!', 3); }
+    if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
+  } else if (G.phase === 'match' || G.phase === 'escape') {
+    G.light = Math.max(0, G.light - CFG.light.decay * dt);
+    if (G.light <= 0 && G.t - (G.darkSay || -99) > 15) { G.darkSay = G.t; SPEECH.say('Işık söndü! Canavar hızlandı! Ekrana dokun!', 2); }
+    if (G.t - G.lastTip > 24) { G.lastTip = G.t; SPEECH.say(G.phase === 'escape' ? 'Çıkış açık! Kaçın!' : 'Tamir yaz, jeneratörleri onar! Ekrana dokun, ışık yansın!', 1, 'tip', 20); }
+    moveMonster(dt);
+    if (G.phase === 'match') {
+      if (GENS.every(g => g.done)) { G.phase = 'escape'; G.escapeEnd = G.t + CFG.escapeSeconds; G.banner = { text: '🚪 ÇIKIŞ AÇILDI! KAÇIN!', born: G.t }; SFX.win(); SPEECH.say('Bütün jeneratörler çalışıyor! Çıkış açıldı, kaçın!', 3); for (const p of free()) goTo(p, EXIT.x, EXIT.y + rand(-30, 30)); }
+      else if (G.t >= G.matchEnd || (G.list.length && !free().length)) endNight(false);
+    } else if (G.t >= G.escapeEnd || !free().length) endNight(true);
+  } else if (G.phase === 'results') {
+    if (G.result === 'insan' && G.phaseT > 1 && Math.random() < 0.3) confetti(3);
+    if (G.phaseT >= CFG.resultsSeconds) finish();
+  }
+  movePlayers(dt);
+  if (G.toast && G.t - G.toast.born > G.toast.dur) G.toast = null;
+  if (!G.toast && G.toasts.length) {
+    const joins = G.toasts.filter(t => t.kind === 'join');
+    if (G.toasts[0].kind === 'join' && joins.length >= 3) { G.toasts = G.toasts.filter(t => t.kind !== 'join'); G.toast = { kind: 'group', title: '+' + joins.length + ' KİŞİ KONAĞA GİRDİ', names: joins.map(j => j.name), born: G.t, dur: 2.6 }; }
+    else { const t = G.toasts.shift(); G.toast = Object.assign(t, { born: G.t, dur: t.kind === 'gift' ? 3.5 : 2.2 }); }
+  }
+  if (G.blast && G.t - G.blast.born > 2.4) G.blast = null;
+}
+function follow(o, sp, dt) {
+  if (!o.path.length) return true;
+  const t = o.path[0], dx = t.x - o.x, dy = t.y - o.y, d = Math.hypot(dx, dy);
+  if (d < sp * dt + 1) { o.x = t.x; o.y = t.y; o.path.shift(); return !o.path.length; }
+  o.x += dx / d * sp * dt; o.y += dy / d * sp * dt; o.vx = dx / d; o.vy = dy / d; return false;
+}
+function movePlayers(dt) {
+  const P = CFG.player, battle = G.phase === 'match' || G.phase === 'escape';
+  for (const p of G.list) {
+    if (p.caged || p.escaped || !p.alive) continue;
+    // canavar yakınsa kaç
+    const dm = Math.hypot(G.mon.x - p.x, G.mon.y - p.y);
+    if (battle && dm < 150 && p.mode !== 'flee' && G.phase !== 'escape' && p.hideUntil < G.t) {
+      p.mode = 'flee'; const far = ROOMS.filter(r => r.i !== roomAt(G.mon.x, G.mon.y)).sort((a, b) => Math.hypot(b.cx - G.mon.x, b.cy - G.mon.y) - Math.hypot(a.cx - G.mon.x, a.cy - G.mon.y))[0];
+      goTo(p, far.cx + rand(-60, 60), far.cy + rand(-40, 40));
+    }
+    const sp = P.speed * (p.mode === 'flee' ? 1.35 : 1) * (G.phase === 'escape' ? 1.3 : 1);
+    const arrived = follow(p, sp, dt);
+    if (G.phase === 'escape' && Math.hypot(EXIT.x - p.x, EXIT.y - p.y) < 30) { p.escaped = true; ticker('🏃 ' + p.name + ' kaçtı!'); continue; }
+    if (arrived) {
+      if (G.phase === 'escape') { goTo(p, EXIT.x, EXIT.y + rand(-30, 30)); continue; }
+      if (p.mode === 'repair' && p.goal && !p.goal.done && Math.hypot(p.goal.x - p.x, p.goal.y - p.y) < 50) {
+        const g = p.goal, rate = P.repairRate * (p.boostUntil > G.t ? P.repairBoost : 1) * (battle ? 1 : 0);
+        g.p = Math.min(G.genNeed, g.p + rate * dt); p.repaired += rate * dt;
+        if (g.p >= G.genNeed && !g.done) { g.done = true; G.flash = 0.4; SFX.go(); const n = GENS.filter(x => x.done).length; ticker('⚡ Jeneratör çalıştı! (' + n + '/3)'); SPEECH.say('Jeneratör çalıştı! ' + n + ' / 3', 2); }
+        if (g.done) p.mode = 'wander';
+        continue;
+      }
+      p.wait -= dt;
+      if (p.wait <= 0) {
+        p.wait = rand(1, 3);
+        // çoğunlukla onarılmamış jeneratöre git (oyun ilerlesin), bazen dolaş
+        const open = GENS.filter(g => !g.done);
+        if (battle && open.length && Math.random() < 0.55) { const g = pick(open); p.mode = 'repair'; p.goal = g; goTo(p, g.x + rand(-24, 24), g.y + rand(-16, 16)); }
+        else { p.mode = 'wander'; const r = pick(ROOMS); goTo(p, r.cx + rand(-RW * 0.35, RW * 0.35), r.cy + rand(-RH * 0.3, RH * 0.3)); }
+      }
+    }
+  }
+}
+function moveMonster(dt) {
+  const M = G.mon, C = CFG.monster;
+  if (M.stunUntil > G.t) return;
+  const lf = G.light / CFG.light.max;
+  const sp = C.speed * (1 + C.darkBonus * (lf < 0.15 ? 1 : 0)) * (1 - C.lightSlow * lf) * (G.phase === 'escape' ? 1.15 : 1);
+  M.retarget -= dt;
+  const vis = free().filter(p => p.hideUntil < G.t);
+  if (M.retarget <= 0 || !M.target || !vis.includes(M.target)) {
+    M.retarget = 1.2;
+    M.target = vis.sort((a, b) => Math.hypot(a.x - M.x, a.y - M.y) - Math.hypot(b.x - M.x, b.y - M.y))[0] || null;
+    if (M.target) { M.path = path(roomAt(M.x, M.y), roomAt(M.target.x, M.target.y)); M.path.push({ x: M.target.x, y: M.target.y }); }
+    else { const r = pick(ROOMS); M.path = path(roomAt(M.x, M.y), r.i); M.path.push({ x: r.cx, y: r.cy }); }
+  }
+  if (M.target && roomAt(M.x, M.y) === roomAt(M.target.x, M.target.y)) M.path = [{ x: M.target.x, y: M.target.y }];
+  follow(M, sp, dt);
+  for (const p of vis) if (Math.hypot(p.x - M.x, p.y - M.y) < C.catchR) catchP(p);
+}
+function catchP(p) {
+  p.caged = true; p.x = CAGE.x + rand(-40, 40); p.y = CAGE.y + rand(-20, 20); p.path = [];
+  G.mon.target = null; G.mon.retarget = 0; G.mon.stunUntil = G.t + 1.2;
+  ticker('😱 ' + p.name + ' YAKALANDI! "kurtar" yazan kurtarabilir'); SFX.boom(); G.flash = 0.25;
+  if (G.t - (G.caughtSay || -99) > 6) { G.caughtSay = G.t; SPEECH.say(speakName(p.raw) + ' yakalandı! Kurtar yazın!', 1); }
+}
+function endNight(humans) {
+  if (G.phase === 'results') return;
+  const esc = G.list.filter(p => p.escaped);
+  G.result = humans && esc.length ? 'insan' : 'canavar'; G.phase = 'results'; G.phaseT = 0;
+  STORE.add(G.result);
+  if (G.result === 'insan') { SFX.win(); confetti(200); SPEECH.say(esc.length + ' kişi konaktan kaçtı! İnsanlar kazandı!', 3); }
+  else { SFX.boom(); SPEECH.say('Canavar kazandı! Kimse kaçamadı…', 3); }
+}
+function finish() { if (NET.embedded) { if (!G.finSent) { G.finSent = true; NET.finish({ kazanan: G.result }); } } else newNight(); }
+
+/* ---------- çizim ---------- */
+const dark = document.createElement('canvas'); dark.width = W; dark.height = H; const dctx = dark.getContext('2d');
+function drawMap() {
+  ctx.fillStyle = '#07060b'; ctx.fillRect(0, 0, W, H);
+  for (const R of ROOMS) {
+    // halı/zemin
+    ctx.fillStyle = (R.c + R.r) % 2 ? '#3b2a22' : '#33261f'; ctx.fillRect(R.x, R.y, RW, RH);
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)'; ctx.lineWidth = 1;
+    for (let x = R.x; x < R.x + RW; x += 34) { ctx.beginPath(); ctx.moveTo(x, R.y); ctx.lineTo(x, R.y + RH); ctx.stroke(); }
+    ctx.fillStyle = '#6d2626'; ctx.fillRect(R.cx - RW * 0.22, R.cy - RH * 0.18, RW * 0.44, RH * 0.36);
+    ctx.strokeStyle = '#a0763c'; ctx.lineWidth = 3; ctx.strokeRect(R.cx - RW * 0.22 + 6, R.cy - RH * 0.18 + 6, RW * 0.44 - 12, RH * 0.36 - 12);
+    // mobilya
+    const h = hash('m' + R.i);
+    ctx.fillStyle = '#4e342e'; ctx.fillRect(R.x + 16, R.y + 16, 60 + h % 40, 26); ctx.fillRect(R.x + RW - 50, R.y + RH - 70 - h % 30, 30, 50);
+    setFont(18); txt(R.name.toLocaleUpperCase('tr'), R.x + 12, R.y + RH - 16, 18, 'rgba(255,255,255,0.35)', 'left', { stroke: false });
+  }
+  // duvarlar (kapı boşlukları hariç)
+  ctx.strokeStyle = '#1b1512'; ctx.lineWidth = 12; ctx.lineCap = 'square';
+  ctx.strokeRect(MAP.x, MAP.y, MAP.w, MAP.h);
+  for (const d of DOORS) {
+    ctx.beginPath();
+    if (d.vertical) { const x = ROOMS[d.a].x + RW, y0 = ROOMS[d.a].y; ctx.moveTo(x, y0); ctx.lineTo(x, d.y - 34); ctx.moveTo(x, d.y + 34); ctx.lineTo(x, y0 + RH); }
+    else { const y = ROOMS[d.a].y + RH, x0 = ROOMS[d.a].x; ctx.moveTo(x0, y); ctx.lineTo(d.x - 34, y); ctx.moveTo(d.x + 34, y); ctx.lineTo(x0 + RW, y); }
+    ctx.stroke();
+  }
+  // jeneratörler
+  for (const g of GENS) {
+    panel(g.x - 26, g.y - 20, 52, 40, 6, g.done ? '#2e7d32' : '#455a64', g.done ? '#b9f6ca' : '#90a4ae', 3);
+    txt(g.done ? '⚡' : '🔧', g.x, g.y + 1, 22, '#fff', 'center', { stroke: false });
+  }
+  // kafes + çıkış
+  ctx.strokeStyle = '#9e9e9e'; ctx.lineWidth = 3; ctx.strokeRect(CAGE.x - 70, CAGE.y - 40, 140, 80);
+  for (let x = CAGE.x - 70; x <= CAGE.x + 70; x += 14) { ctx.beginPath(); ctx.moveTo(x, CAGE.y - 40); ctx.lineTo(x, CAGE.y + 40); ctx.stroke(); }
+  const open = G.phase === 'escape';
+  panel(EXIT.x - 14, EXIT.y - 50, 28, 100, 6, open ? '#43a047' : '#5d4037', open ? '#b9f6ca' : '#3e2723', 3);
+}
+function drawDarkness() {
+  const lf = G.light / CFG.light.max, base = G.phase === 'lobby' ? 0.45 : G.phase === 'results' ? 0.35 : 0.93 - lf * 0.38;
+  dctx.globalCompositeOperation = 'source-over'; dctx.clearRect(0, 0, W, H);
+  dctx.fillStyle = 'rgba(0,0,8,' + base + ')'; dctx.fillRect(MAP.x - 10, MAP.y - 10, MAP.w + 20, MAP.h + 20);
+  dctx.globalCompositeOperation = 'destination-out';
+  const r = 60 + lf * 90;
+  const hole = (x, y, rr, a) => { const g = dctx.createRadialGradient(x, y, 4, x, y, rr); g.addColorStop(0, 'rgba(0,0,0,' + a + ')'); g.addColorStop(1, 'rgba(0,0,0,0)'); dctx.fillStyle = g; dctx.beginPath(); dctx.arc(x, y, rr, 0, TAU); dctx.fill(); };
+  for (const p of G.list) if (!p.caged && !p.escaped && p.hideUntil < G.t) {
+    hole(p.x, p.y, r * 0.6, 0.9);
+    // fener konisi
+    const a = Math.atan2(p.vy || 0, p.vx || 1), g = dctx.createRadialGradient(p.x, p.y, 10, p.x, p.y, r * 1.6);
+    g.addColorStop(0, 'rgba(0,0,0,0.95)'); g.addColorStop(1, 'rgba(0,0,0,0)'); dctx.fillStyle = g;
+    dctx.beginPath(); dctx.moveTo(p.x, p.y); dctx.arc(p.x, p.y, r * 1.6, a - 0.45, a + 0.45); dctx.closePath(); dctx.fill();
+  }
+  for (const g of GENS) if (g.done) hole(g.x, g.y, 140, 0.9);
+  if (G.phase === 'escape') hole(EXIT.x, EXIT.y, 160, 1);
+  ctx.drawImage(dark, 0, 0, W, H);
+}
+function drawActors() {
+  for (const p of G.list) {
+    if (p.escaped) continue;
+    const hidden = p.hideUntil > G.t, bob = Math.sin(G.t * 8 + p.ph) * 2;
+    ctx.globalAlpha = hidden ? 0.35 : p.caged ? 0.7 : 1;
+    ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y + bob, 11, 0, TAU); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    if (G.list.length <= 40 || p.caged) { setFont(16); txt(fitText(p.name, 120), p.x, p.y - 22, 16, p.caged ? '#ff8a80' : '#ffffff', 'center', { lw: 4 }); }
+    ctx.globalAlpha = 1;
+  }
+  // canavar: karanlıkta bile gözleri parlar
+  const M = G.mon, st = M.stunUntil > G.t, s = 1 + Math.sin(G.t * 6) * 0.05;
+  ctx.save(); ctx.translate(M.x, M.y); ctx.scale(s, s);
+  const g = ctx.createRadialGradient(0, 0, 4, 0, 0, 46); g.addColorStop(0, 'rgba(120,0,0,0.6)'); g.addColorStop(1, 'rgba(120,0,0,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 46, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#140808'; ctx.beginPath();
+  for (let i = 0; i < 14; i++) { const a = i / 14 * TAU, rr = 24 + (i % 2) * 8 + Math.sin(G.t * 10 + i) * 2; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = st ? '#ffeb3b' : '#ff1744'; ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 16;
+  ctx.beginPath(); ctx.arc(-8, -4, 4.5, 0, TAU); ctx.arc(8, -4, 4.5, 0, TAU); ctx.fill(); ctx.shadowBlur = 0;
+  if (st) txt('💫', 0, -40, 26, '#fff', 'center', { stroke: false });
+  ctx.restore();
+  for (let i = G.floats.length - 1; i >= 0; i--) {
+    const f = G.floats[i], age = G.t - f.born; if (age > 1.6) { G.floats.splice(i, 1); continue; }
+    const p = G.players.get(f.key); if (!p) continue;
+    ctx.globalAlpha = clamp((1.6 - age) / 0.4, 0, 1); txt(f.text, p.x, p.y - 44 - age * 30, 22, '#ffd23d', 'center', { lw: 5 }); ctx.globalAlpha = 1;
+  }
+}
+function drawHud() {
+  const s = STORE.get();
+  panel(24, SAFE_TOP + 6, 1032, 96, 22, 'rgba(14,10,18,0.92)', '#ff1744', 3);
+  txt('🌙 GECE YARISI', 44, SAFE_TOP + 36, 30, '#ff8a80', 'left', { font: TFONT, lw: 5 });
+  txt('GECE ' + G.night + ' · 🧍 ' + s.insan + ' – ' + s.canavar + ' 👹', 44, SAFE_TOP + 76, 22, '#cfd3f2', 'left', { stroke: false });
+  if (G.phase === 'match' || G.phase === 'escape') { const left = Math.max(0, Math.ceil((G.phase === 'escape' ? G.escapeEnd : G.matchEnd) - G.t)); txt('⏱️ ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'), 700, SAFE_TOP + 54, 44, left <= 15 ? '#ff6b6b' : '#ffffff', 'center', { lw: 6 }); }
+  const fr = free().length, cg = G.list.filter(p => p.caged).length, es = G.list.filter(p => p.escaped).length;
+  txt('🧍' + fr + ' 😱' + cg + (es ? ' 🏃' + es : ''), 1036, SAFE_TOP + 54, 28, '#ffffff', 'right', { lw: 5 });
+  drawCaption(SAFE_TOP + 112);
+  // ışık çubuğu + jeneratörler
+  const y = SAFE_TOP + 180, lf = G.light / CFG.light.max;
+  panel(24, y, 700, 44, 22, 'rgba(14,10,18,0.9)', '#ffd23d', 2);
+  if (lf > 0) panel(24, y, Math.max(44, 700 * lf), 44, 22, lf < 0.15 ? '#ff5a4f' : '#ffd23d');
+  txt('💡 IŞIK ' + Math.round(lf * 100) + '%' + (lf < 0.15 ? ' · CANAVAR HIZLANDI!' : ''), 374, y + 23, 24, '#1a1a2a', 'center', { stroke: false });
+  panel(740, y, 316, 44, 22, 'rgba(14,10,18,0.9)', '#90a4ae', 2);
+  GENS.forEach((g, i) => { const x = 760 + i * 100; panel(x, y + 12, 84, 20, 10, 'rgba(255,255,255,0.15)'); if (g.p > 0) panel(x, y + 12, Math.max(20, 84 * g.p / G.genNeed), 20, 10, g.done ? '#43a047' : '#90caf9'); });
+  const hints = [['💬 Yoruma "gir" yaz → konağa gir', '#6a1b9a'], ['❤️ Ekrana dokun → IŞIK yanar, canavar yavaşlar', '#d81b60'], ['💬 tamir · saklan · kurtar yaz → özel hamle', '#00695c']];
+  const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
+  panel(24, 1236, 1032, 58, 29, 'rgba(14,10,18,0.92)', hc, 4);
+  txt(ht, 540, 1266, 29, '#ffffff', 'center', { lw: 6 });
+  const tk = G.ticker.filter(x => G.t - x.t < 5).slice(-1);
+  tk.forEach(x => { setFont(24); txt(fitText(x.s, 1000), 540, 1194, 24, '#ffffff', 'center', { lw: 5 }); });
+}
+function drawLobby() {
+  if (G.phase !== 'lobby') return;
+  panel(140, 700, 800, 220, 30, 'rgba(14,10,18,0.9)', '#ff1744', 4);
+  if (G.lobbyEnd) {
+    const l = Math.max(0, Math.ceil(G.lobbyEnd - G.t)), pu = l <= 5 ? 1 + Math.sin(G.t * 10) * 0.08 : 1;
+    txt('KONAĞA GİR!', 540, 742, 44, '#ff8a80', 'center', { font: TFONT, lw: 7 });
+    ctx.save(); ctx.translate(540, 825); ctx.scale(pu, pu); txt(String(l), 0, 0, 100, '#ffffff', 'center', { font: TFONT, lw: 12 }); ctx.restore();
+    txt(G.list.length + ' kişi içeride', 540, 890, 28, '#cfd3f2', 'center', { stroke: false });
+  } else {
+    txt('YORUMA "GİR" YAZ', 540, 760, 50, '#ff8a80', 'center', { font: TFONT, lw: 8 });
+    txt('ya da ❤️ ekrana dokun', 540, 825, 34, '#ffffff', 'center', { lw: 6 });
+    txt('En az ' + CFG.minPlayers + ' kişi bekleniyor…', 540, 882, 26, '#cfd3f2', 'center', { stroke: false });
+  }
+}
+function drawCard() {
+  const t = G.toast; if (!t || G.phase === 'results') return;
+  const age = G.t - t.born, a = age < 0.2 ? age / 0.2 : age > t.dur - 0.3 ? (t.dur - age) / 0.3 : 1, y = 1100, h = 80;
+  ctx.save(); ctx.globalAlpha = clamp(a, 0, 1);
+  if (t.kind === 'group') {
+    panel(60, y, 960, h, 18, 'rgba(20,12,24,0.94)', '#ff8a80', 3);
+    txt(t.title, 540, y + 26, 24, '#ff8a80', 'center', { lw: 5 });
+    setFont(22); txt(fitText(t.names.join(', '), 920), 540, y + 58, 22, '#ffffff', 'center', { stroke: false });
+  } else {
+    const gift = t.kind === 'gift';
+    panel(60, y, 960, h, 18, 'rgba(20,12,24,0.94)', gift ? '#ffd23d' : t.color, gift ? 5 : 4);
+    ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(108, y + h / 2, 28, 0, TAU); ctx.fill();
+    txt(gift ? '🎁' : '🔦', 108, y + h / 2 + 2, 26, '#fff', 'center', { stroke: false });
+    txt(gift ? '🎁 HEDİYE GÖNDERDİ' : 'KONAĞA GİRDİ', 152, y + 22, 20, '#ffd56b', 'left', { stroke: false });
+    setFont(32); txt(fitText(t.name, 520), 152, y + 54, 32, '#ffffff', 'left', { lw: 5 });
+    if (gift) txt('💡 IŞIK PATLAMASI! · Teşekkürler 💛', 1000, y + 54, 24, '#ffd23d', 'right', { lw: 4 });
+  }
+  ctx.restore();
+}
+function drawBlast() {
+  const b = G.blast, bn = G.banner;
+  if (bn && G.t - bn.born < 3) { const a = G.t - bn.born; ctx.globalAlpha = clamp(3 - a, 0, 1); txt(bn.text, 540, 640, 64, '#b9f6ca', 'center', { font: TFONT, lw: 10 }); ctx.globalAlpha = 1; }
+  if (!b || G.phase === 'results') return;
+  const age = G.t - b.born, dur = 2.4, a = age > dur - 0.4 ? (dur - age) / 0.4 : 1;
+  ctx.save(); ctx.globalAlpha = clamp(a, 0, 1);
+  const pop = age < 0.3 ? 0.4 + 0.9 * easeOut(age / 0.3) : 1.1 - Math.min(0.1, (age - 0.3) * 0.2);
+  ctx.translate(540, 700); ctx.scale(pop, pop); ctx.rotate(Math.sin(age * 9) * 0.03);
+  txt('💡 IŞIK PATLAMASI!', 0, 0, 84, '#ffd23d', 'center', { font: TFONT, lw: 12, sc: 'rgba(70,30,0,0.95)' });
+  txt('Canavar sersemledi! · ' + b.name, 0, 70, 38, '#ffffff', 'center', { lw: 7 });
+  ctx.restore();
+}
+function drawResults() {
+  if (G.phase !== 'results') return;
+  const hum = G.result === 'insan', a = Math.min(1, G.phaseT / 0.4);
+  ctx.fillStyle = (hum ? 'rgba(10,30,20,' : 'rgba(40,0,0,') + 0.6 * a + ')'; ctx.fillRect(0, 0, W, H);
+  const sc = G.phaseT < 0.5 ? 0.3 + 0.7 * easeOut(G.phaseT / 0.5) : 1;
+  ctx.save(); ctx.translate(540, 600); ctx.scale(sc, sc);
+  txt(hum ? '🏃' : '👹', 0, -170, 150, '#fff', 'center', { stroke: false });
+  txt(hum ? 'İNSANLAR KAÇTI!' : 'CANAVAR KAZANDI!', 0, -20, 88, hum ? '#b9f6ca' : '#ff5252', 'center', { font: TFONT, lw: 12 });
+  const esc = G.list.filter(p => p.escaped).map(p => p.name);
+  if (hum) { setFont(30); txt(fitText('Kaçanlar: ' + esc.join(', '), 900), 0, 60, 30, '#ffffff', 'center', { lw: 5 }); }
+  const best = G.list.slice().sort((a, b) => (b.repaired + b.rescued * 30) - (a.repaired + a.rescued * 30))[0];
+  if (best && (best.repaired > 1 || best.rescued)) txt('🔧 Gecenin kahramanı: ' + best.name, 0, 115, 32, '#ffd23d', 'center', { lw: 6 });
+  ctx.restore();
+  const left = Math.max(0, Math.ceil(CFG.resultsSeconds - G.phaseT));
+  txt(NET.embedded ? 'Oyun seçimine ' + left + ' sn' : 'Yeni gece ' + left + ' sn sonra', 540, 1000, 30, '#ffffff', 'center', { lw: 6 });
+}
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  drawMap(); drawDarkness(); drawActors(); drawHud(); drawLobby(); drawBlast(); drawCard(); drawResults();
+  if (G.flash > 0) { ctx.fillStyle = 'rgba(255,250,220,' + G.flash + ')'; ctx.fillRect(0, 0, W, H); }
+}
+
+newNight();
+startLoop(update, render);
+NET.ready();
+
+/* ---------- deneme paneli (?test=1) ---------- */
+if (/[?&]test=1\b/.test(location.search)) (function () {
+  const p = document.createElement('div'); p.id = 'testp';
+  const names = ['Ayşe', 'Mehmet', 'Zeynep', 'Ali', 'Elif', 'Can', 'Deniz', 'Ece', 'Burak', 'Selin'];
+  const anyP = () => { const n = pick(names) + ((Math.random() * 90) | 0); return { user: n.toLowerCase(), nickname: n }; };
+  const known = () => { const a = free(); return a.length ? (q => ({ user: q.key, nickname: q.raw }))(pick(a)) : anyP(); };
+  const btns = [
+    ['➕ 10 kişi', () => { for (let i = 0; i < 10; i++) onEvent({ type: 'chat', ...anyP(), text: 'gir' }); }],
+    ['❤️ 30 beğeni', () => onEvent({ type: 'like', ...known(), count: 30 })],
+    ['🔧 tamir', () => onEvent({ type: 'chat', ...known(), text: 'tamir' })],
+    ['🗝️ kurtar', () => onEvent({ type: 'chat', ...known(), text: 'kurtar' })],
+    ['🎁 Gül', () => onEvent({ type: 'gift', ...known(), giftName: 'Gül', diamonds: 1, count: 1 })],
+    ['⏩ Başlat', () => { if (G.phase === 'lobby') G.lobbyEnd = G.t + 0.1; }],
+    ['🤖 Kalabalık', () => { if (p.iv) { clearInterval(p.iv); p.iv = null; return; } p.iv = setInterval(() => { const r = Math.random(); onEvent(r < 0.75 ? { type: 'like', ...known(), count: 1 + ((Math.random() * 10) | 0) } : { type: 'chat', ...known(), text: pick(['tamir', 'saklan', 'kurtar', 'hadi']) }); }, 250); }]
+  ];
+  for (const [l, f] of btns) { const b = document.createElement('button'); b.textContent = l; b.onclick = f; p.appendChild(b); }
+  document.body.appendChild(p);
+})();
+
+</script>
+</body>
+</html>
