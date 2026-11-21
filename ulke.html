@@ -543,7 +543,7 @@ function update(dt) {
     }
     const l = leader();
     for (const m of [200, 400, 600, 700]) if (l && l.x >= m && !G.milestones.has(m)) { G.milestones.add(m); SPEECH.say(D - m > 100 ? 'Önde ' + l.ad + '! Bitişe ' + (D - m) + ' metre!' : 'Son yüz metre! ' + l.ad + ' önde!', 1, 'ms', 4); }
-    if (G.t - G.lastTip > 22) { G.lastTip = G.t; SPEECH.say('Ekrana dokun, ülkenin atı hızlansın!', 1, 'tip', 20); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Ekrana dokun, ülkenin atı hızlansın!', 1, 'tip', 110); }
     if (G.t - (G.flushT || 0) > 1.2) { G.flushT = G.t; for (const T of TEAMS) if (T.likeAcc >= 1) { G.floats.push({ team: T.idx, text: '+' + Math.round(T.likeAcc) + ' m ❤️', born: G.t }); T.likeAcc = 0; } if (G.floats.length > 30) G.floats.splice(0, G.floats.length - 30); }
     if ((G.winner && G.t - G.finishAt > 4) || G.phaseT > CFG.maxRaceSeconds) endRace();
   } else if (G.phase === 'results') {

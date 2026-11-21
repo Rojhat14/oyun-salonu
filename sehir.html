@@ -485,7 +485,7 @@ function update(dt) {
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'match') {
     G.tickT += dt; if (G.tickT >= 1) { G.tickT = 0; conquestTick(); }
-    if (G.t - G.lastTip > 25) { G.lastTip = G.t; SPEECH.say('Şehrini yaz, ekrana dokun! En çok ili alan kazanır!', 1, 'tip', 20); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Şehrini yaz, ekrana dokun! En çok ili alan kazanır!', 1, 'tip', 110); }
     if (G.t >= G.matchEnd) endRound();
   } else if (G.phase === 'results') {
     if (G.phaseT > 1 && Math.random() < 0.3) confetti(3);

@@ -584,7 +584,7 @@ function update(dt) {
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'match') {
     const L = alive();
-    if (G.t - G.lastTip > 24) { G.lastTip = G.t; SPEECH.say('Kalkan, vur ya da iyileş yaz! Ekrana dokun, seviye atla!', 1, 'tip', 20); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Kalkan, vur ya da iyileş yaz! Ekrana dokun, seviye atla!', 1, 'tip', 110); }
     if (L.length <= 1 && G.list.length >= 2) endRound(L[0] || null);
     else if (G.t >= G.matchEnd) endRound(L.slice().sort((a, b) => b.kills - a.kills || b.hp - a.hp)[0]);
     if (G.t - (G.flushT || 0) > 1.2) { G.flushT = G.t; for (const w of L) if (w.likeAcc >= 1) { G.floats.push({ key: w.key, text: '+' + Math.round(w.likeAcc) + ' ⭐', born: G.t }); w.likeAcc = 0; } if (G.floats.length > 40) G.floats.splice(0, G.floats.length - 40); }

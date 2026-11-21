@@ -422,8 +422,8 @@ function update(dt) {
     if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
   } else if (G.phase === 'match' || G.phase === 'escape') {
     G.light = Math.max(0, G.light - CFG.light.decay * dt);
-    if (G.light <= 0 && G.t - (G.darkSay || -99) > 15) { G.darkSay = G.t; SPEECH.say('Işık söndü! Canavar hızlandı! Ekrana dokun!', 2); }
-    if (G.t - G.lastTip > 24) { G.lastTip = G.t; SPEECH.say(G.phase === 'escape' ? 'Çıkış açık! Kaçın!' : 'Tamir yaz, jeneratörleri onar! Ekrana dokun, ışık yansın!', 1, 'tip', 20); }
+    if (G.light <= 0 && G.t - (G.darkSay || -99) > 60) { G.darkSay = G.t; SPEECH.say('Işık söndü! Canavar hızlandı! Ekrana dokun!', 2); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say(G.phase === 'escape' ? 'Çıkış açık! Kaçın!' : 'Tamir yaz, jeneratörleri onar! Ekrana dokun, ışık yansın!', 1, 'tip', 110); }
     moveMonster(dt);
     if (G.phase === 'match') {
       if (GENS.every(g => g.done)) { G.phase = 'escape'; G.escapeEnd = G.t + CFG.escapeSeconds; G.banner = { text: '🚪 ÇIKIŞ AÇILDI! KAÇIN!', born: G.t }; SFX.win(); SPEECH.say('Bütün jeneratörler çalışıyor! Çıkış açıldı, kaçın!', 3); for (const p of free()) goTo(p, EXIT.x, EXIT.y + rand(-30, 30)); }

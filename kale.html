@@ -485,7 +485,7 @@ function update(dt) {
         for (let i = 0; i < n; i++) fire(t, 'arrow', pend / n);
       }
     }
-    if (G.t - G.lastTip > 22) { G.lastTip = G.t; SPEECH.say('Ekrana dokun, kalen ok yağdırsın!', 1, 'tip', 20); }
+    if (G.t - G.lastTip > 120) { G.lastTip = G.t; SPEECH.say('Ekrana dokun, kalen ok yağdırsın!', 1, 'tip', 110); }
     if (G.t - (G.flushT || 0) > 1.2) {
       G.flushT = G.t;
       for (const p of G.players.values()) if (p.likeAcc >= 1) { G.floats.push({ team: p.team, text: '+' + Math.round(p.likeAcc) + ' 🏹', name: p.name, born: G.t }); p.likeAcc = 0; }

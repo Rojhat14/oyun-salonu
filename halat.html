@@ -439,7 +439,7 @@ function update(dt) {
     const lead = G.pos < -0.05 ? 0 : G.pos > 0.05 ? 1 : -1;
     if (lead !== G.lastLead && lead >= 0 && G.t - (G.leadSaid || -99) > 8) { G.leadSaid = G.t; SPEECH.say(TEAMS[lead].ad.toLocaleLowerCase('tr') + ' takım öne geçti!', 1, 'lead', 6); }
     G.lastLead = lead;
-    if (G.t - G.lastStatus > 20) { G.lastStatus = G.t; SPEECH.say('Ekrana dokun, takımın çeksin!', 1, 'tip', 18); }
+    if (G.t - G.lastStatus > 120) { G.lastStatus = G.t; SPEECH.say('Ekrana dokun, takımın çeksin!', 1, 'tip', 110); }
     if (G.pos <= -1) endMatch(0); else if (G.pos >= 1) endMatch(1);
     else if (G.t >= G.matchEnd) endMatch(G.pos < 0 ? 0 : G.pos > 0 ? 1 : (r0 >= r1 ? 0 : 1));
     // beğeni yüzen yazıları
