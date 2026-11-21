@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Şehir Savaşları</title>
+<style>
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+body { display: flex; align-items: center; justify-content: center; }
+#game { display: block; position: relative; z-index: 2; }
+#oyun { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 1; visibility: hidden; background: #000; }
+#testp { position: fixed; right: 8px; top: 8px; z-index: 9; display: flex; flex-direction: column; gap: 4px; }
+#testp button { font: 13px sans-serif; padding: 6px 10px; border-radius: 6px; border: 0; background: #2d2f55; color: #fff; cursor: pointer; text-align: left; }
+</style>
+</head>
+<body>
+
+<canvas id="game" width="1080" height="1920"></canvas>
+<script>
+/* =====================================================================
+   NET – oyunun dış dünyayla bağlantısı.
+   • Tek başına açılırsa köprüye (ws://localhost:8080) bağlanır.
+   • Oyun Salonu'nun içinde (iframe, ?salon=1) açılırsa olayları salondan alır,
+     spiker isteklerini ve "oyun bitti" haberini salona gönderir.
+   Kullanım: NET.on(m => …)  NET.send({type:'say',…})  NET.open()  NET.finish({…})
+   ===================================================================== */
+const NET = (function () {
+  const embedded = window.parent !== window && /[?&]salon=1\b/.test(location.search);
+  const handlers = [];
+  let ws = null, status = embedded ? 'salon' : 'bağlı değil', readySent = false;
+  const emit = m => { for (const h of handlers) { try { h(m); } catch (e) { console.error(e); } } };
+  function screenInfo() { return { type: 'ekran', w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1, ua: navigator.userAgent.slice(0, 160) }; }
+  function wsUrl() {
+    if (location.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return 'ws://' + location.host + '/ws';
+    return 'ws://localhost:8080';
+  }
+  function connect() {
+    let s;
+    try { s = new WebSocket(wsUrl()); } catch (e) { setTimeout(connect, 4000); return; }
+    ws = s;
+    s.onopen = () => { status = 'bağlı'; send(screenInfo()); };
+    s.onmessage = m => { try { const d = JSON.parse(m.data); for (const x of Array.isArray(d) ? d : [d]) if (x) emit(x); } catch (e) { /* bozuk */ } };
+    s.onerror = () => {};
+    s.onclose = () => { status = 'bağlı değil'; if (ws === s) ws = null; setTimeout(connect, 4000); };
+  }
+  function send(o) {
+    if (embedded) { try { window.parent.postMessage({ salonOyun: true, msg: o }, '*'); } catch (e) { /* sessiz */ } return; }
+    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch (e) { /* sessiz */ } }
+  }
+  if (embedded) {
+    window.addEventListener('message', ev => {
+      if (ev.source !== window.parent) return;
+      const d = ev.data; if (d && d.salon && d.msg) emit(d.msg);
+    });
+  } else if (!/[?&]baglanti=0\b/.test(location.search)) setTimeout(connect, 0);
+  return {
+    embedded,
+    on(fn) { handlers.push(fn); },
+    send,
+    open() { return embedded || (!!ws && ws.readyState === 1); },
+    get status() { return status; },
+    // oyun hazır: salon bekleyen oyuncuları gönderir
+    ready() { if (embedded && !readySent) { readySent = true; send({ type: 'hazir' }); } },
+    // oyun bitti: salon oylamaya döner
+    finish(summary) { if (embedded) send(Object.assign({ type: 'bitti' }, summary || {})); }
+  };
+})();
+
+</script>
+<script>
+/* =====================================================================
+   ORTAK – salon ve 2D oyunların paylaştığı araçlar
+   (çizim yardımcıları, ekran ölçekleme, spiker, ses efektleri, olay biçimi)
+   Gerekli: net.js önce yüklenmiş olmalı. Sayfada <canvas id="game"> bulunmalı.
+   ===================================================================== */
+'use strict';
+const W = 1080, H = 1920;
+const SAFE_TOP = 222, SAFE_BOTTOM = 1300;      // TikTok uygulamasında üst ~215 px ve alttaki yorumlar kapanır
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let RS = 1;
+function fit() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const cw = Math.floor(W * s), ch = Math.floor(H * s);
+  canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+  RS = Math.round(Math.min(2, Math.max(1, cw * (window.devicePixelRatio || 1) / W)) * 4) / 4;
+  if (canvas.width !== Math.round(W * RS)) { canvas.width = Math.round(W * RS); canvas.height = Math.round(H * RS); }
+}
+window.addEventListener('resize', fit); fit();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[(Math.random() * a.length) | 0];
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const TAU = Math.PI * 2;
+const FONT = '"Segoe UI", "Trebuchet MS", Tahoma, sans-serif';
+const TFONT = 'Georgia, "Palatino Linotype", "Times New Roman", serif';
+const fmt = n => Math.round(n).toLocaleString('tr-TR');
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function rrPath(g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  g.beginPath(); g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+function setFont(size, o) { ctx.font = ((o && o.weight) || 'bold') + ' ' + size + 'px ' + ((o && o.font) || FONT); }
+function txt(s, x, y, size, color, align, o) {
+  o = o || {};
+  setFont(size, o);
+  ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  if (o.stroke !== false) { ctx.lineJoin = 'round'; ctx.lineWidth = o.lw || Math.max(3, size / 6); ctx.strokeStyle = o.sc || 'rgba(8,10,18,0.9)'; ctx.strokeText(s, x, y); }
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function fitText(s, maxW) {
+  if (ctx.measureText(s).width <= maxW) return s;
+  const a = Array.from(s);
+  while (a.length > 1 && ctx.measureText(a.join('') + '…').width > maxW) a.pop();
+  return a.join('') + '…';
+}
+function panel(x, y, w, h, r, fill, stroke, lw) {
+  rrPath(ctx, x, y, w, h, r); ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 3; ctx.stroke(); }
+}
+function cleanName(n, max) {
+  n = String(n == null ? '' : n).replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim();
+  if (!n) n = 'Anonim';
+  const a = Array.from(n);
+  return a.length > max ? a.slice(0, max).join('') + '…' : n;
+}
+const BANNED_WORDS = ['amk', 'aq', 'orospu', 'piç', 'pic', 'sik', 'yarrak', 'göt', 'got', 'ibne', 'pezevenk', 'kahpe', 'siktir', 'amın', 'amin', 'gavat', 'sürtük', 'mal', 'salak', 'aptal', 'fuck', 'shit', 'bitch', 'porn', 'sex', 'seks'];
+function speakName(raw) {
+  let s = String(raw || '').normalize('NFC').replace(/[_.\-]+/g, ' ').replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+  s = Array.from(s).slice(0, 20).join('').trim();
+  if (!s || !/\p{L}/u.test(s)) return 'bir izleyici';
+  const low = s.toLocaleLowerCase('tr'), words = low.split(' ');
+  for (const b of BANNED_WORDS) if (b.length <= 3 ? words.includes(b) : low.includes(b)) return 'bir izleyici';
+  return s;
+}
+// köprüden gelen olayı tek biçime çevirir
+function normEvent(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  const type = String(ev.type || '').toLowerCase();
+  if (!['chat', 'like', 'gift', 'follow', 'share', 'member'].includes(type)) return null;
+  const key = String(ev.user || ev.nickname || 'anonim').slice(0, 80);
+  const raw = String(ev.nickname || ev.user || 'Anonim');
+  return { type, key, raw, name: cleanName(raw, 16), text: String(ev.text || '').slice(0, 200),
+    count: Math.max(1, Math.min(Math.floor(Number(ev.count) || 1), 100000)), diamonds: Math.max(0, Math.floor(Number(ev.diamonds) || 0)) };
+}
+const trLow = s => String(s || '').toLocaleLowerCase('tr').normalize('NFC');
+
+/* ---------- Spiker: köprünün Türkçe sesi (Yelda), yoksa tarayıcı sesi ---------- */
+const SPEECH = (function () {
+  const queue = [], waiting = new Map(), lastCat = {};
+  let busy = false, caption = '', captionAt = -1e9, reqId = Math.floor(Math.random() * 1e9);
+  const now = () => performance.now() / 1000;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  function say(text, prio, cat, cooldown) {
+    if (!text) return;
+    if (cat && cooldown && lastCat[cat] != null && now() - lastCat[cat] < cooldown) return;
+    if (cat) lastCat[cat] = now();
+    const item = { text, prio: prio || 1 };
+    if (queue.length >= 3) {
+      let lo = 0; for (let i = 1; i < queue.length; i++) if (queue[i].prio < queue[lo].prio) lo = i;
+      if (queue[lo].prio >= item.prio) return;
+      queue.splice(lo, 1);
+    }
+    let i = queue.findIndex(q => q.prio < item.prio); if (i < 0) i = queue.length;
+    queue.splice(i, 0, item); pump();
+  }
+  function pump() {
+    if (busy || !queue.length) return;
+    const it = queue.shift(); busy = true; caption = it.text; captionAt = performance.now();
+    play(it.text).then(() => { busy = false; setTimeout(pump, 250); });
+  }
+  async function play(text) {
+    if (NET.open()) { const b64 = await request(text); if (b64 && await playWav(b64)) return; }
+    if ('speechSynthesis' in window) { await browserSay(text); return; }
+    await wait(Math.min(5000, 1200 + text.length * 55));
+  }
+  function request(text) {
+    return new Promise(res => {
+      const id = ++reqId, to = setTimeout(() => { waiting.delete(id); res(null); }, 6000);
+      waiting.set(id, b64 => { clearTimeout(to); res(b64); });
+      NET.send({ type: 'say', id, text });
+    });
+  }
+  function onTTS(m) { const f = waiting.get(m.id); if (f) { waiting.delete(m.id); f(m.audio || null); } }
+  function playWav(b64) {
+    return new Promise(res => {
+      try {
+        const bin = atob(b64), u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const url = URL.createObjectURL(new Blob([u8], { type: 'audio/wav' }));
+        const a = new Audio(url);
+        let done = false; const fin = okk => { if (done) return; done = true; URL.revokeObjectURL(url); res(okk); };
+        a.onended = () => fin(true); a.onerror = () => fin(false); setTimeout(() => fin(true), 15000);
+        a.play().catch(() => fin(false));
+      } catch (e) { res(false); }
+    });
+  }
+  function browserSay(text) {
+    return new Promise(res => {
+      try {
+        const u = new SpeechSynthesisUtterance(text); u.lang = 'tr-TR'; u.rate = 1.08;
+        const v = speechSynthesis.getVoices().find(x => /^tr/i.test(x.lang)); if (v) u.voice = v;
+        let done = false; const fin = () => { if (!done) { done = true; res(); } };
+        u.onend = fin; u.onerror = fin; setTimeout(fin, 12000); speechSynthesis.speak(u);
+      } catch (e) { res(); }
+    });
+  }
+  return { say, onTTS, get speaking() { return busy; }, get caption() { return caption; }, get captionAge() { return (performance.now() - captionAt) / 1000; }, clear() { queue.length = 0; } };
+})();
+
+/* ---------- Ses efektleri (dosyasız, telifsiz) ---------- */
+const SFX = (function () {
+  let ac = null, master = null;
+  function A() {
+    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination); } catch (e) { return null; } }
+    if (ac.state === 'suspended') ac.resume().catch(() => {});
+    return ac;
+  }
+  function tone(f, d, type, vol, slide, delay) {
+    const a = A(); if (!a) return;
+    const t = a.currentTime + (delay || 0), o = a.createOscillator(), g = a.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f * slide), t + d);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.05);
+  }
+  function noise(d, vol, hp) {
+    const a = A(); if (!a) return;
+    const b = a.createBuffer(1, Math.floor(a.sampleRate * d), a.sampleRate), ch = b.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / ch.length);
+    const s = a.createBufferSource(), g = a.createGain(), f = a.createBiquadFilter();
+    f.type = 'highpass'; f.frequency.value = hp || 600; s.buffer = b; g.gain.value = vol || 0.15;
+    s.connect(f); f.connect(g); g.connect(master); s.start();
+  }
+  return {
+    join() { tone(660, 0.12, 'triangle', 0.15); tone(990, 0.15, 'triangle', 0.12, 1, 0.08); },
+    vote() { tone(880, 0.08, 'square', 0.06); },
+    tick() { tone(1200, 0.05, 'square', 0.05); },
+    go() { tone(523, 0.18, 'triangle', 0.2); tone(659, 0.18, 'triangle', 0.2, 1, 0.15); tone(784, 0.35, 'triangle', 0.22, 1, 0.3); },
+    thanks() { tone(784, 0.15, 'sine', 0.18); tone(1046, 0.25, 'sine', 0.18, 1, 0.12); tone(1318, 0.3, 'sine', 0.15, 1, 0.24); },
+    pull() { tone(140, 0.12, 'sawtooth', 0.05, 0.7); },
+    cheer() { noise(1.2, 0.12, 900); },
+    win() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => tone(f, 0.28, 'triangle', 0.2, 1, i * 0.16)); noise(1.6, 0.1, 1200); },
+    boom() { tone(90, 0.5, 'sawtooth', 0.25, 0.4); noise(0.5, 0.2, 200); }
+  };
+})();
+window.addEventListener('pointerdown', () => SFX.vote(), { once: true });
+
+/* ---------- Konfeti ---------- */
+const CONFETTI = [];
+function confetti(n, x, y) {
+  for (let i = 0; i < n; i++) CONFETTI.push({ x: x == null ? rand(0, W) : x, y: y == null ? rand(-200, 0) : y, vx: rand(-200, 200), vy: rand(-300, 200), g: 500, rot: rand(0, TAU), vr: rand(-8, 8), size: rand(12, 22), life: rand(2, 3.5), color: pick(['#ffd23d', '#ff5a7a', '#4fc3f7', '#7ee081', '#ffffff', '#ff9f1a']) });
+  if (CONFETTI.length > 600) CONFETTI.splice(0, CONFETTI.length - 600);
+}
+function updConfetti(dt) {
+  for (let i = CONFETTI.length - 1; i >= 0; i--) {
+    const p = CONFETTI[i]; p.life -= dt; if (p.life <= 0) { CONFETTI.splice(i, 1); continue; }
+    p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+  }
+}
+function drawConfetti() {
+  for (const p of CONFETTI) { ctx.save(); ctx.globalAlpha = clamp(p.life, 0, 1); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2); ctx.restore(); }
+}
+
+/* ---------- Spiker altyazısı (üst bilgi şeridi) ---------- */
+function drawCaption(y) {
+  const c = SPEECH.caption; if (!c || SPEECH.captionAge > 7) return;
+  const a = clamp(7 - SPEECH.captionAge, 0, 1);
+  ctx.save(); ctx.globalAlpha = a;
+  panel(24, y, 1032, 56, 14, 'rgba(14,18,34,0.85)', 'rgba(255,210,61,0.7)', 2);
+  setFont(26); txt('🎙️ ' + fitText(c, 960), 44, y + 29, 26, '#ffffff', 'left', { stroke: false });
+  ctx.restore();
+}
+
+/* ---------- Ana döngü ---------- */
+function startLoop(update, render) {
+  let last = performance.now();
+  function frame(ts) {
+    const dt = clamp((ts - last) / 1000, 0, 0.05); last = ts;
+    try { update(dt); updConfetti(dt); ctx.setTransform(RS, 0, 0, RS, 0, 0); render(); drawConfetti(); } catch (e) { console.error(e); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+</script>
+<script>
+/* =====================================================================
+   ŞEHİR SAVAŞLARI – Türkiye haritası, 81 il
+   Katılım: yoruma şehrinin adını ya da plakasını yaz (ör. "istanbul", "34", "antep").
+   Beğeni / yorum / takip / paylaşım şehrine güç verir; güç birikince şehrin
+   komşu illeri fethetmeye başlar. Süre bitince en çok ili olan şehir kazanır.
+   Hediye → "ORDU GELDİ" (güç + efekt).
+   ===================================================================== */
+const CFG = {
+  lobbySeconds: NET.embedded ? 20 : 30, matchSeconds: 150, resultsSeconds: 14, minCities: 2,
+  gain: { like: 1, chat: 4, follow: 15, share: 20, giftPerDiamond: 25, giftExponent: 0.55, giftMax: 150 },
+  likeWindow: 4, likeFull: 40, likeOverflow: 0.3, chatCooldown: 3,
+  neutralHp: 12, garrison: 0.35, maxCarry: 400, maxLobbyWait: 150
+};
+// [plaka, ad, enlem, boylam]
+const ILLER = [[1,'Adana',37.0,35.32],[2,'Adıyaman',37.76,38.28],[3,'Afyonkarahisar',38.76,30.54],[4,'Ağrı',39.72,43.05],[5,'Amasya',40.65,35.83],[6,'Ankara',39.93,32.86],[7,'Antalya',36.89,30.71],[8,'Artvin',41.18,41.82],[9,'Aydın',37.85,27.85],[10,'Balıkesir',39.65,27.88],[11,'Bilecik',40.14,29.98],[12,'Bingöl',38.88,40.5],[13,'Bitlis',38.4,42.11],[14,'Bolu',40.74,31.61],[15,'Burdur',37.72,30.29],[16,'Bursa',40.19,29.06],[17,'Çanakkale',40.15,26.41],[18,'Çankırı',40.6,33.62],[19,'Çorum',40.55,34.95],[20,'Denizli',37.78,29.09],[21,'Diyarbakır',37.91,40.24],[22,'Edirne',41.68,26.56],[23,'Elazığ',38.67,39.22],[24,'Erzincan',39.75,39.49],[25,'Erzurum',39.9,41.27],[26,'Eskişehir',39.78,30.52],[27,'Gaziantep',37.07,37.38],[28,'Giresun',40.91,38.39],[29,'Gümüşhane',40.46,39.48],[30,'Hakkari',37.58,43.74],[31,'Hatay',36.2,36.16],[32,'Isparta',37.76,30.55],[33,'Mersin',36.8,34.64],[34,'İstanbul',41.01,28.98],[35,'İzmir',38.42,27.14],[36,'Kars',40.6,43.1],[37,'Kastamonu',41.38,33.78],[38,'Kayseri',38.73,35.49],[39,'Kırklareli',41.73,27.22],[40,'Kırşehir',39.15,34.16],[41,'Kocaeli',40.77,29.92],[42,'Konya',37.87,32.48],[43,'Kütahya',39.42,29.98],[44,'Malatya',38.35,38.31],[45,'Manisa',38.61,27.43],[46,'Kahramanmaraş',37.58,36.94],[47,'Mardin',37.31,40.74],[48,'Muğla',37.22,28.36],[49,'Muş',38.74,41.49],[50,'Nevşehir',38.62,34.71],[51,'Niğde',37.97,34.68],[52,'Ordu',40.98,37.88],[53,'Rize',41.02,40.52],[54,'Sakarya',40.69,30.44],[55,'Samsun',41.29,36.33],[56,'Siirt',37.93,41.94],[57,'Sinop',42.03,35.15],[58,'Sivas',39.75,37.02],[59,'Tekirdağ',40.98,27.51],[60,'Tokat',40.31,36.55],[61,'Trabzon',41.0,39.72],[62,'Tunceli',39.11,39.55],[63,'Şanlıurfa',37.16,38.79],[64,'Uşak',38.68,29.41],[65,'Van',38.49,43.38],[66,'Yozgat',39.82,34.81],[67,'Zonguldak',41.45,31.79],[68,'Aksaray',38.37,34.03],[69,'Bayburt',40.26,40.23],[70,'Karaman',37.18,33.22],[71,'Kırıkkale',39.85,33.51],[72,'Batman',37.88,41.13],[73,'Şırnak',37.52,42.46],[74,'Bartın',41.63,32.34],[75,'Ardahan',41.11,42.7],[76,'Iğdır',39.92,44.04],[77,'Yalova',40.66,29.27],[78,'Karabük',41.2,32.62],[79,'Kilis',36.72,37.12],[80,'Osmaniye',37.07,36.25],[81,'Düzce',40.84,31.16]];
+const TAKMA = { antep: 27, maras: 46, urfa: 63, afyon: 3, izmit: 41, adapazari: 54, icel: 33, antakya: 31, iskenderun: 31, sanliurfa: 63, kmaras: 46 };
+// Türkiye ana hatları (boylam, enlem) – yaklaşık
+const SINIR = [[26.04,40.74],[26.6,41.35],[26.35,41.72],[27.0,42.05],[28.0,41.98],[28.6,41.35],[29.1,41.22],[29.25,41.22],[29.9,41.15],[30.7,41.1],[31.4,41.3],[32.3,41.73],[33.4,42.0],[34.7,41.95],[35.2,42.08],[35.9,41.73],[36.4,41.3],[36.9,41.35],[37.6,41.1],[38.4,40.95],[39.7,41.05],[40.5,41.05],[41.5,41.5],[42.6,41.58],[43.5,41.1],[43.75,40.7],[43.65,40.1],[44.8,39.7],[44.2,39.4],[44.4,38.4],[44.3,37.9],[44.8,37.2],[44.2,37.1],[42.8,37.35],[42.2,37.2],[41.2,37.07],[40.2,37.1],[39.2,36.68],[38.2,36.9],[37.0,36.65],[36.7,36.8],[36.6,36.2],[36.2,35.8],[35.9,35.9],[36.15,36.6],[35.6,36.6],[34.6,36.8],[33.9,36.3],[32.8,36.03],[32.0,36.5],[30.7,36.85],[30.4,36.3],[29.7,36.15],[29.0,36.65],[28.2,36.75],[27.4,37.0],[27.3,37.5],[26.9,38.0],[26.3,38.25],[26.8,38.45],[26.7,39.0],[26.2,39.4],[26.1,39.8],[26.4,40.1],[26.7,40.35],[27.5,40.35],[28.6,40.4],[29.4,40.4],[29.9,40.72],[29.3,40.8],[29.05,40.97],[28.6,40.97],[27.5,40.95],[26.95,40.55],[26.7,40.4],[26.2,40.1]];
+const MAP = { x: 20, y: 600, w: 1040, lon0: 25.9, lon1: 44.9, lat1: 42.15 };
+MAP.kx = MAP.w / (MAP.lon1 - MAP.lon0); MAP.ky = MAP.kx / Math.cos(39 * Math.PI / 180); MAP.h = Math.round((MAP.lat1 - 35.8) * MAP.ky);
+const proj = (lat, lon) => [MAP.x + (lon - MAP.lon0) * MAP.kx, MAP.y + (MAP.lat1 - lat) * MAP.ky];
+const norm = s => trLow(s).replace(/ç/g, 'c').replace(/ğ/g, 'g').replace(/ı/g, 'i').replace(/i̇/g, 'i').replace(/ö/g, 'o').replace(/ş/g, 's').replace(/ü/g, 'u').replace(/â/g, 'a');
+const CITY = ILLER.map(([p, ad, lat, lon], i) => { const [x, y] = proj(lat, lon); return { i, plaka: p, ad, key: norm(ad), x, y, owner: -1, hp: CFG.neutralHp, flash: 0, nb: new Set() }; });
+const PALETTE = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#f06292', '#3949ab', '#795548', '#c0ca33', '#26a69a', '#d81b60', '#5e35b1', '#7cb342', '#ffb300'];
+
+/* ---------- harita ızgarası (Voronoi) ---------- */
+const CELL = 2, GW = Math.ceil(MAP.w / CELL), GH = Math.ceil(MAP.h / CELL);
+const owner = new Int16Array(GW * GH).fill(-1);
+function inPoly(lon, lat) {
+  let c = false;
+  for (let i = 0, j = SINIR.length - 1; i < SINIR.length; j = i++) {
+    const [xi, yi] = SINIR[i], [xj, yj] = SINIR[j];
+    if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+for (let gy = 0; gy < GH; gy++) for (let gx = 0; gx < GW; gx++) {
+  const px = MAP.x + gx * CELL + CELL / 2, py = MAP.y + gy * CELL + CELL / 2;
+  const lon = MAP.lon0 + (px - MAP.x) / MAP.kx, lat = MAP.lat1 - (py - MAP.y) / MAP.ky;
+  if (!inPoly(lon, lat)) continue;
+  let best = -1, bd = 1e9;
+  for (const c of CITY) { const d = (c.x - px) ** 2 + (c.y - py) ** 2; if (d < bd) { bd = d; best = c.i; } }
+  owner[gy * GW + gx] = best;
+}
+for (let gy = 0; gy < GH; gy++) for (let gx = 0; gx < GW; gx++) {
+  const a = owner[gy * GW + gx]; if (a < 0) continue;
+  const r = gx + 1 < GW ? owner[gy * GW + gx + 1] : -1, d = gy + 1 < GH ? owner[(gy + 1) * GW + gx] : -1;
+  if (r >= 0 && r !== a) { CITY[a].nb.add(r); CITY[r].nb.add(a); }
+  if (d >= 0 && d !== a) { CITY[a].nb.add(d); CITY[d].nb.add(a); }
+}
+const mapCanvas = document.createElement('canvas'); mapCanvas.width = GW; mapCanvas.height = GH;
+const mctx = mapCanvas.getContext('2d'), img = mctx.createImageData(GW, GH);
+let mapDirty = true;
+function hexRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function paintMap() {
+  const d = img.data;
+  for (let k = 0; k < owner.length; k++) {
+    const c = owner[k], o = k * 4;
+    if (c < 0) { d[o + 3] = 0; continue; }
+    const C = CITY[c], gx = k % GW, gy = (k / GW) | 0;
+    const edgeOwn = (gx + 1 < GW && owner[k + 1] >= 0 && CITY[owner[k + 1]].owner !== C.owner) || (gy + 1 < GH && owner[k + GW] >= 0 && CITY[owner[k + GW]].owner !== C.owner) || (gx > 0 && owner[k - 1] >= 0 && CITY[owner[k - 1]].owner !== C.owner) || (gy > 0 && owner[k - GW] >= 0 && CITY[owner[k - GW]].owner !== C.owner);
+    const edgeProv = (gx + 1 < GW && owner[k + 1] >= 0 && owner[k + 1] !== c) || (gy + 1 < GH && owner[k + GW] >= 0 && owner[k + GW] !== c);
+    let rgb = C.owner >= 0 ? hexRgb(TEAM[C.owner].renk) : [214, 205, 184];
+    if (edgeOwn) rgb = rgb.map(v => v * 0.45); else if (edgeProv) rgb = rgb.map(v => v * 0.82);
+    d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = 255;
+  }
+  mctx.putImageData(img, 0, 0); mapDirty = false;
+}
+
+/* ---------- oyun durumu ---------- */
+const STORE = (function () {
+  const K = 'sehir-savaslari-v1'; let d = { wins: {}, tur: 0 };
+  try { const r = JSON.parse(localStorage.getItem(K) || 'null'); if (r && r.wins) d = r; } catch (e) { /* yok */ }
+  const save = () => { try { localStorage.setItem(K, JSON.stringify(d)); } catch (e) { /* sessiz */ } };
+  return { win(a) { d.wins[a] = (d.wins[a] || 0) + 1; save(); return d.wins[a]; }, nextRound() { d.tur++; save(); return d.tur; }, top(n) { return Object.entries(d.wins).sort((a, b) => b[1] - a[1]).slice(0, n); } };
+})();
+let TEAM = [];   // şehir takımları: { city, renk, members:Set, power, carry, score }
+const G = { t: 0, phase: 'lobby', phaseT: 0, lobbyEnd: 0, matchEnd: 0, round: 0, players: new Map(), toasts: [], toast: null, blast: null, ticker: [], winner: -1, likeB: new Map(), finSent: false, tickT: 0, lastTip: 0, unassigned: new Map() };
+
+function newRound() {
+  G.round = STORE.nextRound(); G.phase = 'lobby'; G.phaseT = 0; G.lobbyEnd = 0; G.winner = -1; G.finSent = false;
+  TEAM = []; G.players.clear(); G.unassigned.clear(); G.toasts = []; G.toast = null; G.blast = null;
+  for (const c of CITY) { c.owner = -1; c.hp = CFG.neutralHp; c.flash = 0; }
+  mapDirty = true;
+  SPEECH.say('Şehir savaşları başlıyor! Yoruma şehrinin adını ya da plakasını yaz!', 3);
+}
+function findCity(text) {
+  const n = norm(text).trim();
+  const m = n.match(/^#?\s*(\d{1,2})(?!\d)/); if (m) { const p = Number(m[1]); if (p >= 1 && p <= 81) return p - 1; }
+  const words = n.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  for (const w of words) { if (TAKMA[w]) return TAKMA[w] - 1; const c = CITY.find(c => c.key === w); if (c) return c.i; }
+  for (const c of CITY) if (c.key.length >= 4 && n.replace(/\s/g, '').includes(c.key)) return c.i;
+  return -1;
+}
+function teamOf(ci) {
+  let t = TEAM.findIndex(x => x.city === ci);
+  if (t >= 0) return t;
+  const used = new Set(TEAM.map(x => x.renk));
+  const renk = PALETTE.find(p => !used.has(p)) || PALETTE[TEAM.length % PALETTE.length];
+  TEAM.push({ city: ci, renk, members: new Set(), power: 0, carry: 0, score: 0, conquered: 0 });
+  t = TEAM.length - 1;
+  const C = CITY[ci];
+  if (C.owner < 0 || G.phase === 'lobby') { C.owner = t; C.hp = CFG.neutralHp * 2; mapDirty = true; }
+  return t;
+}
+function join(e, ci, silent) {
+  let p = G.players.get(e.key);
+  if (p && p.team >= 0 && G.phase !== 'lobby') return p;
+  const t = teamOf(ci);
+  if (p) { TEAM[p.team] && TEAM[p.team].members.delete(e.key); p.team = t; }
+  else { p = { key: e.key, raw: e.raw, name: e.name, team: t, score: 0, lastChat: -99 }; G.players.set(e.key, p); }
+  TEAM[t].members.add(e.key); G.unassigned.delete(e.key);
+  if (!silent) { toastPush({ kind: 'join', name: e.name, team: t }); SFX.join(); }
+  return p;
+}
+const regionsOf = t => CITY.reduce((n, c) => n + (c.owner === t ? 1 : 0), 0);
+function addPower(p, u, scored) { if (!p || p.team < 0 || !(u > 0) || G.phase !== 'match') return; TEAM[p.team].power += u; if (scored) { p.score += u; TEAM[p.team].score += u; } }
+function ticker(s) { G.ticker.push({ s, t: G.t }); if (G.ticker.length > 6) G.ticker.shift(); }
+function toastPush(o) { if (o.kind === 'gift') G.toasts.unshift(o); else G.toasts.push(o); if (G.toasts.length > 20) G.toasts.length = 20; }
+
+function onEvent(raw) {
+  if (raw.type === 'oyuncular') {
+    for (const q of Array.isArray(raw.list) ? raw.list : []) { const e = normEvent({ type: 'chat', user: q.user, nickname: q.nickname }); if (e) G.unassigned.set(e.key, { name: e.name, t: G.t }); }
+    return;
+  }
+  const e = normEvent(raw); if (!e) return;
+  let p = G.players.get(e.key);
+  if (e.type === 'chat') {
+    const ci = findCity(e.text);
+    if (ci >= 0 && (!p || G.phase === 'lobby')) p = join(e, ci);
+    else if (ci >= 0 && p && TEAM[p.team].city !== ci && G.t - (p.warnT || -99) > 15) { p.warnT = G.t; ticker('ℹ️ ' + p.name + ' zaten ' + CITY[TEAM[p.team].city].ad + ' ordusunda'); }
+    if (!p) { nudge(e); return; }
+    if (G.t - p.lastChat >= CFG.chatCooldown) { p.lastChat = G.t; addPower(p, CFG.gain.chat, true); }
+    if (/nas[ıi]l|ne yap|kural|oynan/i.test(e.text) && G.t - (G.helpT || -99) > 25) { G.helpT = G.t; SPEECH.say('Yoruma şehrini yaz, sonra ekrana dokun! Şehrin komşu illeri fetheder.', 2); }
+    return;
+  }
+  if (!p) { nudge(e); return; }
+  const C = CFG.gain;
+  if (e.type === 'like') {
+    const b = G.likeB.get(e.key) || { t: G.t, n: 0 };
+    if (G.t - b.t > CFG.likeWindow) { b.t = G.t; b.n = 0; }
+    const full = Math.max(0, Math.min(e.count, CFG.likeFull - b.n)); b.n += e.count; G.likeB.set(e.key, b);
+    addPower(p, (full + (e.count - full) * CFG.likeOverflow) * C.like, true);
+  } else if (e.type === 'gift') {
+    const d = Math.max(1, e.diamonds), u = Math.min(C.giftMax, C.giftPerDiamond * Math.pow(d, C.giftExponent) * Math.min(e.count, 10));
+    if (G.phase === 'lobby') TEAM[p.team].carry += u * 0.5; else addPower(p, u, false);
+    if (G.t - (p.lastGift || -99) > 4) {
+      p.lastGift = G.t; G.blast = { name: e.name, team: p.team, born: G.t };
+      toastPush({ kind: 'gift', name: e.name, team: p.team }); SFX.thanks();
+      SPEECH.say(speakName(e.raw) + ', çok teşekkürler!', 2, 'gift', 3);
+    }
+  } else if (e.type === 'follow') { addPower(p, C.follow, true); ticker('➕ ' + e.name + ' takip etti!'); }
+  else if (e.type === 'share') { addPower(p, C.share, true); ticker('📣 ' + e.name + ' paylaştı!'); }
+}
+function nudge(e) {
+  G.unassigned.set(e.key, { name: e.name, t: G.t });
+  if (G.t - (G.nudgeT || -99) > 12) { G.nudgeT = G.t; ticker('🏙️ ' + e.name + ', yoruma şehrini yaz! (ör. istanbul ya da 34)'); }
+}
+NET.on(m => { if (m.type === 'tts') SPEECH.onTTS(m); else onEvent(m); });
+
+/* ---------- fetih ---------- */
+function conquestTick() {
+  const order = TEAM.map((_, i) => i).sort((a, b) => TEAM[b].power - TEAM[a].power);
+  for (const t of order) {
+    const T = TEAM[t]; let P = Math.min(CFG.maxCarry, T.power + T.carry); T.power = 0; T.carry = 0;
+    for (let guard = 0; guard < 6 && P > 0; guard++) {
+      // hedefler: sahip olunan illerin komşuları + (hiç ili kalmadıysa) kendi başkenti
+      const own = CITY.filter(c => c.owner === t), cand = new Set();
+      for (const c of own) for (const n of c.nb) if (CITY[n].owner !== t) cand.add(n);
+      if (!own.length) cand.add(T.city);
+      if (!cand.size) { // kendi illerini güçlendir
+        for (const c of own) c.hp += P / own.length * CFG.garrison; P = 0; break;
+      }
+      let best = -1, bc = 1e9;
+      for (const n of cand) { const c = CITY[n], cost = c.hp * (n === T.city ? 0.5 : 1); if (cost < bc) { bc = cost; best = n; } }
+      if (P < bc) { CITY[best].hp -= P * 0.5; CITY[best].hp = Math.max(CITY[best].hp, 4); P = 0; break; }   // kuşatma: savunmayı aşındırır
+      P -= bc;
+      const c = CITY[best], prev = c.owner;
+      c.owner = t; c.hp = CFG.neutralHp + bc * CFG.garrison; c.flash = 1; T.conquered++; mapDirty = true;
+      if (prev >= 0) ticker('⚔️ ' + CITY[T.city].ad + ', ' + CITY[TEAM[prev].city].ad + "'dan " + c.ad + "'ı aldı!");
+      else ticker('🚩 ' + CITY[T.city].ad + ' → ' + c.ad + ' fethedildi');
+      if (prev >= 0 && G.t - (G.sayConq || -99) > 9) { G.sayConq = G.t; SPEECH.say(CITY[T.city].ad + ', ' + c.ad + ' ilini aldı!', 1); }
+    }
+    T.carry = Math.min(CFG.maxCarry, P);
+  }
+}
+
+/* ---------- güncelleme ---------- */
+function update(dt) {
+  G.t += dt; G.phaseT += dt;
+  if (G.phase === 'lobby') {
+    if (!G.lobbyEnd && TEAM.length >= CFG.minCities) { G.lobbyEnd = G.t + CFG.lobbySeconds; SPEECH.say(CFG.lobbySeconds + ' saniye sonra savaş başlıyor! Şehrini yazmayı unutma!', 2); }
+    if (G.lobbyEnd) { const l = G.lobbyEnd - G.t; if (l <= 5 && Math.ceil(l) !== Math.ceil(l + dt)) SFX.tick(); }
+    if (G.lobbyEnd && G.t >= G.lobbyEnd) { G.phase = 'match'; G.phaseT = 0; G.matchEnd = G.t + CFG.matchSeconds; G.lastTip = G.t; SFX.go(); SPEECH.say('Savaş başladı! Ekrana dokun, şehrin büyüsün!', 3); }
+    if (NET.embedded && !G.lobbyEnd && G.phaseT > CFG.maxLobbyWait) finish();
+  } else if (G.phase === 'match') {
+    G.tickT += dt; if (G.tickT >= 1) { G.tickT = 0; conquestTick(); }
+    if (G.t - G.lastTip > 25) { G.lastTip = G.t; SPEECH.say('Şehrini yaz, ekrana dokun! En çok ili alan kazanır!', 1, 'tip', 20); }
+    if (G.t >= G.matchEnd) endRound();
+  } else if (G.phase === 'results') {
+    if (G.phaseT > 1 && Math.random() < 0.3) confetti(3);
+    if (G.phaseT >= CFG.resultsSeconds) finish();
+  }
+  for (const c of CITY) if (c.flash > 0) c.flash = Math.max(0, c.flash - dt * 1.2);
+  if (G.toast && G.t - G.toast.born > G.toast.dur) G.toast = null;
+  if (!G.toast && G.toasts.length) {
+    const joins = G.toasts.filter(t => t.kind === 'join');
+    if (G.toasts[0].kind === 'join' && joins.length >= 3) { G.toasts = G.toasts.filter(t => t.kind !== 'join'); G.toast = { kind: 'group', title: '+' + joins.length + ' YENİ ASKER', names: joins.map(j => j.name + ' (' + CITY[TEAM[j.team].city].ad + ')'), born: G.t, dur: 2.6 }; }
+    else { const t = G.toasts.shift(); G.toast = Object.assign(t, { born: G.t, dur: t.kind === 'gift' ? 3.5 : 2.2 }); }
+  }
+  if (G.blast && G.t - G.blast.born > 2.4) G.blast = null;
+  for (const [k, u] of G.unassigned) if (G.t - u.t > 60 || G.players.has(k)) G.unassigned.delete(k);
+}
+function ranking() { return TEAM.map((T, t) => ({ t, n: regionsOf(t), s: T.score })).sort((a, b) => b.n - a.n || b.s - a.s); }
+function endRound() {
+  if (G.phase !== 'match') return;
+  const r = ranking(); G.phase = 'results'; G.phaseT = 0; G.winner = r.length ? r[0].t : -1;
+  if (G.winner >= 0) TEAM[G.winner].wins = STORE.win(CITY[TEAM[G.winner].city].ad);
+  SFX.win(); confetti(220);
+  if (G.winner >= 0) { const T = TEAM[G.winner], mvp = topMembers(G.winner, 1)[0]; SPEECH.say(CITY[T.city].ad + ' kazandı! ' + regionsOf(G.winner) + ' il fethetti!' + (mvp ? ' Komutan ' + speakName(mvp.raw) + '!' : ''), 3); }
+}
+function topMembers(t, n) { return Array.from(TEAM[t].members, k => G.players.get(k)).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, n); }
+function finish() {
+  if (NET.embedded) { if (!G.finSent) { G.finSent = true; NET.finish({ kazanan: G.winner >= 0 ? CITY[TEAM[G.winner].city].ad : null }); } }
+  else newRound();
+}
+
+/* ---------- çizim ---------- */
+function drawScene() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0d2a4a'); g.addColorStop(0.5, '#174a78'); g.addColorStop(1, '#0b2038');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // deniz dalgaları
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 2;
+  for (let y = 560; y < 1120; y += 26) { ctx.beginPath(); for (let x = 0; x <= W; x += 20) ctx.lineTo(x, y + Math.sin(x * 0.02 + G.t + y) * 4); ctx.stroke(); }
+  if (mapDirty) paintMap();
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+  ctx.imageSmoothingEnabled = false; ctx.drawImage(mapCanvas, MAP.x, MAP.y, GW * CELL, GH * CELL);
+  ctx.restore();
+  // fetih parlaması
+  for (const c of CITY) if (c.flash > 0) { ctx.globalAlpha = c.flash; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(c.x, c.y, 14 + (1 - c.flash) * 40, 0, TAU); ctx.stroke(); ctx.globalAlpha = 1; }
+  // başkentler
+  TEAM.forEach((T, t) => {
+    const c = CITY[T.city], held = c.owner === t;
+    ctx.fillStyle = held ? T.renk : '#555'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 11, 0, TAU); ctx.fill(); ctx.stroke();
+    txt('★', c.x, c.y + 1, 14, '#fff', 'center', { stroke: false });
+  });
+  // en büyük 6 şehrin adı
+  const top = ranking().slice(0, 6);
+  for (const r of top) { const c = CITY[TEAM[r.t].city]; setFont(20); txt(c.ad + ' ' + r.n, c.x, c.y - 24, 20, '#ffffff', 'center', { lw: 5, sc: 'rgba(0,0,0,0.85)' }); }
+}
+function drawHud() {
+  panel(24, SAFE_TOP + 6, 1032, 96, 22, 'rgba(14,18,34,0.9)', '#ffd23d', 3);
+  txt('🗺️ ŞEHİR SAVAŞLARI', 44, SAFE_TOP + 36, 30, '#ffd23d', 'left', { font: TFONT, lw: 5 });
+  txt('TUR ' + G.round + ' · ' + TEAM.length + ' şehir · ' + G.players.size + ' asker', 44, SAFE_TOP + 76, 22, '#cfd3f2', 'left', { stroke: false });
+  if (G.phase === 'match') { const left = Math.max(0, Math.ceil(G.matchEnd - G.t)); txt('⏱️ ' + left, 1036, SAFE_TOP + 54, 48, left <= 10 ? '#ff6b6b' : '#ffffff', 'right', { lw: 6 }); }
+  drawCaption(SAFE_TOP + 112);
+  // sıralama: en çok ili olan 6 şehir (iki sütun)
+  const r = ranking().slice(0, 6), py = SAFE_TOP + 180;
+  if (r.length) {
+    panel(24, py, 1032, 30 + Math.ceil(r.length / 2) * 40 + 8, 16, 'rgba(14,18,34,0.8)', 'rgba(255,255,255,0.25)', 2);
+    txt('🏆 EN ÇOK İL', 540, py + 18, 20, '#ffd23d', 'center', { stroke: false });
+    r.forEach((x, i) => {
+      const T = TEAM[x.t], col = i % 2, row = (i / 2) | 0, cx = 44 + col * 516, cy = py + 52 + row * 40;
+      ctx.fillStyle = T.renk; ctx.beginPath(); ctx.arc(cx + 12, cy, 12, 0, TAU); ctx.fill();
+      setFont(24); txt((i + 1) + '. ' + fitText(CITY[T.city].ad, 220), cx + 32, cy, 24, '#fff', 'left', { stroke: false });
+      txt('🗺️ ' + x.n + '  👥 ' + T.members.size, cx + 490, cy, 22, '#ffd23d', 'right', { stroke: false });
+    });
+  }
+  // ipucu
+  const hints = [['💬 Yoruma şehrini yaz → ör. istanbul · 34 · antep', '#3949ab'], ['❤️ Ekrana dokun → şehrin komşu illeri FETHEDER', '#d81b60'], ['🏆 Süre bitince en çok ili olan şehir kazanır', '#2e7d32']];
+  const [ht, hc] = hints[Math.floor(G.t / 5) % hints.length];
+  panel(24, 1236, 1032, 58, 29, 'rgba(14,18,34,0.9)', hc, 4);
+  txt(ht, 540, 1266, 29, '#ffffff', 'center', { lw: 6 });
+  const tk = G.ticker.filter(x => G.t - x.t < 5).slice(-2);
+  tk.forEach((x, i) => { setFont(24); txt(fitText(x.s, 1000), 540, 1206 - (tk.length - 1 - i) * 32, 24, '#ffffff', 'center', { lw: 5 }); });
+}
+function drawLobby() {
+  if (G.phase !== 'lobby') return;
+  const y = 1062;
+  panel(90, y - 2, 900, 96, 24, 'rgba(14,18,34,0.9)', '#ffd23d', 3);
+  if (G.lobbyEnd) { const l = Math.max(0, Math.ceil(G.lobbyEnd - G.t)); txt('⚔️ Savaş ' + l + ' sn sonra başlıyor!', 540, y + 28, 36, '#ffd23d', 'center', { lw: 6 }); }
+  else txt('🏙️ ŞEHRİNİ YAZ! En az 2 şehir bekleniyor', 540, y + 28, 32, '#ffd23d', 'center', { lw: 6 });
+  const wait = Array.from(G.unassigned.values()).slice(-4).map(u => u.name);
+  setFont(22); txt(wait.length ? fitText('Şehir bekleyenler: ' + wait.join(', '), 860) : 'Örnek: istanbul · ankara · 35 · antep · urfa', 540, y + 68, 22, '#cfd3f2', 'center', { stroke: false });
+}
+function drawCard() {
+  const t = G.toast; if (!t || G.phase === 'results') return;
+  const age = G.t - t.born, a = age < 0.2 ? age / 0.2 : age > t.dur - 0.3 ? (t.dur - age) / 0.3 : 1, y = G.phase === 'lobby' ? 500 : 1108, h = 84;
+  ctx.save(); ctx.globalAlpha = clamp(a, 0, 1);
+  if (t.kind === 'group') {
+    panel(60, y, 960, h, 18, 'rgba(18,24,48,0.94)', '#ffd56b', 3);
+    txt(t.title, 540, y + 28, 26, '#ffd56b', 'center', { lw: 5 });
+    setFont(22); txt(fitText(t.names.join(', '), 920), 540, y + 62, 22, '#ffffff', 'center', { stroke: false });
+  } else {
+    const T = TEAM[t.team], gift = t.kind === 'gift', ad = CITY[T.city].ad;
+    panel(60, y, 960, h, 18, 'rgba(18,24,48,0.94)', gift ? '#ffb300' : T.renk, gift ? 5 : 4);
+    ctx.fillStyle = T.renk; ctx.beginPath(); ctx.arc(112, y + h / 2, 30, 0, TAU); ctx.fill();
+    txt(gift ? '🎁' : '🚩', 112, y + h / 2 + 2, 28, '#fff', 'center', { stroke: false });
+    txt(gift ? '🎁 HEDİYE GÖNDERDİ · ' + ad : ad.toLocaleUpperCase('tr') + ' ORDUSUNA KATILDI', 160, y + 24, 20, '#ffd56b', 'left', { stroke: false });
+    setFont(34); txt(fitText(t.name, 520), 160, y + 58, 34, '#ffffff', 'left', { lw: 5 });
+    if (gift) txt('🛡️ ORDU GELDİ! · Teşekkürler 💛', 1000, y + 58, 24, '#ffd23d', 'right', { lw: 4 });
+  }
+  ctx.restore();
+}
+function drawBlast() {
+  const b = G.blast; if (!b || G.phase === 'results') return;
+  const age = G.t - b.born, dur = 2.4, a = age > dur - 0.4 ? (dur - age) / 0.4 : 1, T = TEAM[b.team];
+  ctx.save(); ctx.globalAlpha = clamp(a, 0, 1);
+  const pop = age < 0.3 ? 0.4 + 0.9 * easeOut(age / 0.3) : 1.1 - Math.min(0.1, (age - 0.3) * 0.2);
+  ctx.translate(540, 760); ctx.scale(pop, pop);
+  txt('🛡️ ORDU GELDİ!', 0, 0, 92, '#ffd23d', 'center', { font: TFONT, lw: 12, sc: 'rgba(70,30,0,0.95)' });
+  txt(CITY[T.city].ad + ' · ' + b.name, 0, 72, 40, '#ffffff', 'center', { lw: 7 });
+  ctx.restore();
+}
+function drawResults() {
+  if (G.phase !== 'results' || G.winner < 0) return;
+  const T = TEAM[G.winner], C = CITY[T.city], a = Math.min(1, G.phaseT / 0.4);
+  ctx.fillStyle = 'rgba(8,10,20,' + 0.45 * a + ')'; ctx.fillRect(0, 0, W, H);
+  const sc = G.phaseT < 0.5 ? 0.3 + 0.7 * easeOut(G.phaseT / 0.5) : 1;
+  ctx.save(); ctx.translate(540, 470); ctx.scale(sc, sc);
+  panel(-470, -150, 940, 330, 30, 'rgba(14,18,34,0.92)', T.renk, 6);
+  txt('🏆 ' + C.ad.toLocaleUpperCase('tr'), 0, -70, 84, '#ffffff', 'center', { font: TFONT, lw: 12, sc: T.renk });
+  txt('KAZANDI!', 0, 20, 70, '#ffd23d', 'center', { font: TFONT, lw: 10 });
+  txt('🗺️ ' + regionsOf(G.winner) + ' il · 👥 ' + T.members.size + ' asker · 🏆 ' + (T.wins || 1) + '. zafer', 0, 100, 32, '#ffffff', 'center', { lw: 6 });
+  const m = topMembers(G.winner, 3).map(p => p.name);
+  if (m.length) { setFont(28); txt(fitText('Komutanlar: ' + m.join(', '), 880), 0, 148, 28, '#ffd56b', 'center', { lw: 5 }); }
+  ctx.restore();
+  const left = Math.max(0, Math.ceil(CFG.resultsSeconds - G.phaseT));
+  txt(NET.embedded ? 'Oyun seçimine ' + left + ' sn' : 'Yeni tur ' + left + ' sn sonra', 540, 1130, 30, '#cfd3f2', 'center', { lw: 5 });
+}
+function render() { ctx.clearRect(0, 0, W, H); drawScene(); drawHud(); drawLobby(); drawBlast(); drawCard(); drawResults(); }
+
+newRound();
+startLoop(update, render);
+NET.ready();
+
+/* ---------- deneme paneli (?test=1) ---------- */
+if (/[?&]test=1\b/.test(location.search)) (function () {
+  const p = document.createElement('div'); p.id = 'testp';
+  const names = ['Ayşe', 'Mehmet', 'Zeynep', 'Ali', 'Elif', 'Can', 'Deniz', 'Ece', 'Burak', 'Selin'];
+  const cities = ['istanbul', 'ankara', '35', 'antep', 'urfa', 'trabzon', 'van', 'konya', 'diyarbakır', 'bursa', 'adana', 'erzurum'];
+  const anyP = () => { const n = pick(names) + ((Math.random() * 90) | 0); return { user: n.toLowerCase(), nickname: n }; };
+  const known = () => { const a = Array.from(G.players.values()); return a.length ? (q => ({ user: q.key, nickname: q.raw }))(pick(a)) : anyP(); };
+  const btns = [
+    ['🏙️ 12 şehirden asker', () => { for (const c of cities) onEvent({ type: 'chat', ...anyP(), text: c }); }],
+    ['❤️ 30 beğeni', () => onEvent({ type: 'like', ...known(), count: 30 })],
+    ['🎁 Gül', () => onEvent({ type: 'gift', ...known(), giftName: 'Gül', diamonds: 1, count: 1 })],
+    ['⏩ Başlat', () => { if (G.phase === 'lobby') G.lobbyEnd = G.t + 0.1; }],
+    ['🤖 Kalabalık', () => { if (p.iv) { clearInterval(p.iv); p.iv = null; return; } p.iv = setInterval(() => { const r = Math.random(); onEvent(r < 0.8 ? { type: 'like', ...known(), count: 1 + ((Math.random() * 10) | 0) } : { type: 'chat', ...anyP(), text: pick(cities) }); }, 200); }]
+  ];
+  for (const [l, f] of btns) { const b = document.createElement('button'); b.textContent = l; b.onclick = f; p.appendChild(b); }
+  document.body.appendChild(p);
+})();
+
+</script>
+</body>
+</html>
