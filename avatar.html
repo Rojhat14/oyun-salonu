@@ -144,17 +144,17 @@ function updateArms(dt) {
   }
 }
 function drawArms(breathe) {
-  const U = 125, F = 112, sleeve = LOOK.shirt, sleeveD = shade(LOOK.shirt, 0.82);
+  const U = 120, F = 108, sleeve = LOOK.shirt, sleeveD = shade(LOOK.shirt, 0.82);
   for (const A of ARMS) {
-    const sx = A.sx, S = { x: 400 + sx * 198, y: 610 + breathe * 0.5 };
+    const sx = A.sx, S = { x: 400 + sx * 150, y: 605 + breathe * 0.5 };
     const E = { x: S.x + sx * Math.sin(A.up) * U, y: S.y + Math.cos(A.up) * U };
     const Hn = { x: E.x + sx * Math.sin(A.fore) * F, y: E.y + Math.cos(A.fore) * F };
     g.lineCap = 'round'; g.lineJoin = 'round';
-    g.strokeStyle = sleeveD; g.lineWidth = 62; g.beginPath(); g.moveTo(S.x, S.y); g.lineTo(E.x, E.y); g.lineTo(Hn.x, Hn.y); g.stroke();
-    g.strokeStyle = sleeve; g.lineWidth = 52; g.beginPath(); g.moveTo(S.x, S.y); g.lineTo(E.x, E.y); g.lineTo(Hn.x, Hn.y); g.stroke();
+    g.strokeStyle = sleeveD; g.lineWidth = 50; g.beginPath(); g.moveTo(S.x, S.y); g.lineTo(E.x, E.y); g.lineTo(Hn.x, Hn.y); g.stroke();
+    g.strokeStyle = sleeve; g.lineWidth = 42; g.beginPath(); g.moveTo(S.x, S.y); g.lineTo(E.x, E.y); g.lineTo(Hn.x, Hn.y); g.stroke();
     // manşet
     const dx = Hn.x - E.x, dy = Hn.y - E.y, dl = Math.hypot(dx, dy) || 1, ux = dx / dl, uy = dy / dl;
-    g.strokeStyle = sleeveD; g.lineWidth = 50; g.beginPath(); g.moveTo(Hn.x - ux * 14, Hn.y - uy * 14); g.lineTo(Hn.x - ux * 2, Hn.y - uy * 2); g.stroke();
+    g.strokeStyle = sleeveD; g.lineWidth = 40; g.beginPath(); g.moveTo(Hn.x - ux * 14, Hn.y - uy * 14); g.lineTo(Hn.x - ux * 2, Hn.y - uy * 2); g.stroke();
     // el: avuç + parmaklar (açık el ↔ yumruk)
     const hx = Hn.x + ux * 26, hy = Hn.y + uy * 26, ang = Math.atan2(uy, ux);
     g.save(); g.translate(hx, hy); g.rotate(ang - Math.PI / 2);
@@ -178,16 +178,16 @@ function draw() {
   // ---- beyaz kapüşonlu ----
   const hood = LOOK.shirt, hoodD = shade(hood, 0.86), hoodDD = shade(hood, 0.74);
   g.save(); g.translate(400, 800 + breathe * 0.5);
-  g.fillStyle = hood; g.beginPath(); g.moveTo(-290, 0); g.quadraticCurveTo(-280, -200, -120, -232); g.lineTo(120, -232); g.quadraticCurveTo(280, -200, 290, 0); g.closePath(); g.fill();
-  g.fillStyle = hoodD; g.beginPath(); g.moveTo(-290, 0); g.quadraticCurveTo(-284, -150, -200, -205); g.quadraticCurveTo(-240, -110, -230, 0); g.closePath(); g.fill();
-  g.beginPath(); g.moveTo(290, 0); g.quadraticCurveTo(284, -150, 200, -205); g.quadraticCurveTo(240, -110, 230, 0); g.closePath(); g.fill();
+  g.fillStyle = hood; g.beginPath(); g.moveTo(-185, 0); g.quadraticCurveTo(-200, -190, -110, -228); g.lineTo(110, -228); g.quadraticCurveTo(200, -190, 185, 0); g.closePath(); g.fill();   // ince gövde
+  g.fillStyle = hoodD; g.beginPath(); g.moveTo(-185, 0); g.quadraticCurveTo(-198, -150, -150, -205); g.quadraticCurveTo(-170, -110, -158, 0); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(185, 0); g.quadraticCurveTo(198, -150, 150, -205); g.quadraticCurveTo(170, -110, 158, 0); g.closePath(); g.fill();
   // kapüşon yakası
-  g.fillStyle = hoodD; g.beginPath(); g.ellipse(0, -232, 150, 46, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = hood; g.beginPath(); g.ellipse(0, -238, 118, 30, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = hoodD; g.beginPath(); g.ellipse(0, -232, 132, 42, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = hood; g.beginPath(); g.ellipse(0, -238, 104, 27, 0, 0, Math.PI * 2); g.fill();
   // bağcıklar
   g.strokeStyle = '#e9e6e0'; g.lineWidth = 7; g.lineCap = 'round';
   for (const sx of [-1, 1]) { const sw = Math.sin(t * 2 + sx) * 4; g.beginPath(); g.moveTo(sx * 34, -214); g.quadraticCurveTo(sx * 40 + sw, -150, sx * 36 + sw, -96); g.stroke(); g.fillStyle = '#9aa0a8'; g.fillRect(sx * 36 + sw - 4, -100, 8, 24); }
-  g.strokeStyle = hoodDD; g.lineWidth = 3; g.beginPath(); g.moveTo(-160, -60); g.quadraticCurveTo(0, -40, 160, -60); g.stroke();
+  g.strokeStyle = hoodDD; g.lineWidth = 3; g.beginPath(); g.moveTo(-110, -60); g.quadraticCurveTo(0, -46, 110, -60); g.stroke();
   g.restore();
   // boyun
   g.fillStyle = shade(LOOK.skin, 0.82); rr(352, 515 + bob * 0.3, 96, 80, 30); g.fill();
