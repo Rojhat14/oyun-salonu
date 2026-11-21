@@ -90,6 +90,7 @@ function readLevel(dt) {
 
 /* ---------- animasyon ---------- */
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v), lerp = (a, b, t) => a + (b - a) * t;
+let loudT = 0, exciteT = 0, waveT = 0, waveCd = 6;
 let t = 0, last = performance.now(), blinkT = 2, blink = 0, lookX = 0, lookTarget = 0, lookT = 3, bounce = 0, mouthPrev = 0, quiet = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
@@ -104,6 +105,13 @@ function frame(now) {
   lookT -= dt; if (lookT <= 0) { lookTarget = quiet > 1.5 ? (Math.random() * 2 - 1) : 0; lookT = 1.5 + Math.random() * 2.5; }
   lookX = lerp(lookX, lookTarget, dt * 4);
   bounce = lerp(bounce, level, 0.3);
+  // yüksek ses → kollar havaya; uzun sessizlik → ara sıra el sallama
+  if (level > 0.6) loudT += dt; else loudT = Math.max(0, loudT - dt * 2);
+  if (loudT > 0.25) exciteT = 1.4;
+  exciteT = Math.max(0, exciteT - dt);
+  waveCd -= dt; if (quiet > 5 && waveCd <= 0) { waveT = 2.2; waveCd = 9 + Math.random() * 8; }
+  waveT = Math.max(0, waveT - dt);
+  updateArms(dt);
   draw();
   if (AYAR) document.getElementById('seviye').textContent = '🎚️ ' + Math.round(level * 100);
   requestAnimationFrame(frame);
@@ -120,6 +128,46 @@ const STUBBLE = (() => { const a = []; let seed = 3; const r = () => (seed = (se
   for (let i = 0; i < 900; i++) { const x = -150 + r() * 300, y = 20 + r() * 170; const e = (x * x) / (150 * 150) + ((y - 0) * (y - 0)) / (185 * 185); if (e < 1 && !(Math.abs(x) < 70 && y < 70)) a.push([x, y]); }
   return a; })();
 const KULAKLIK = Q.get('kulaklik') === '1';
+// kollar: up = üst kolun dışa açısı (aşağıdan), fore = ön kolun açısı (+ dışa, − içe/yukarı)
+const ARMS = [{ sx: -1, up: 0.12, fore: 0.05, ph: 0 }, { sx: 1, up: 0.12, fore: 0.05, ph: 1.7 }];
+function updateArms(dt) {
+  for (const A of ARMS) {
+    let up, fore, hand = 0;
+    if (exciteT > 0) { up = 2.5 + Math.sin(t * 9 + A.ph) * 0.12; fore = 2.85 + Math.sin(t * 11 + A.ph) * 0.15; hand = 1; }
+    else if (waveT > 0 && A.sx === 1) { up = 1.35; fore = 2.75 + Math.sin(t * 11) * 0.4; hand = 1; }
+    else if (talk > 0.15) {
+      const k = Math.sin(t * 3.2 + A.ph), j = Math.sin(t * 5.3 + A.ph * 2);
+      up = 0.32 + 0.12 * k + level * 0.25; fore = -2.25 + 0.38 * j - level * 0.3; hand = 0.5 + 0.5 * k;
+    } else { up = 0.12 + Math.sin(t * 1.3 + A.ph) * 0.02; fore = 0.05; hand = 0; }
+    const sp = Math.min(1, dt * (exciteT > 0 ? 10 : 6));
+    A.up = lerp(A.up, up, sp); A.fore = lerp(A.fore, fore, sp); A.hand = lerp(A.hand || 0, hand, sp);
+  }
+}
+function drawArms(breathe) {
+  const U = 125, F = 112, sleeve = LOOK.shirt, sleeveD = shade(LOOK.shirt, 0.82);
+  for (const A of ARMS) {
+    const sx = A.sx, S = { x: 400 + sx * 198, y: 610 + breathe * 0.5 };
+    const E = { x: S.x + sx * Math.sin(A.up) * U, y: S.y + Math.cos(A.up) * U };
+    const Hn = { x: E.x + sx * Math.sin(A.fore) * F, y: E.y + Math.cos(A.fore) * F };
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    g.strokeStyle = sleeveD; g.lineWidth = 62; g.beginPath(); g.moveTo(S.x, S.y); g.lineTo(E.x, E.y); g.lineTo(Hn.x, Hn.y); g.stroke();
+    g.strokeStyle = sleeve; g.lineWidth = 52; g.beginPath(); g.moveTo(S.x, S.y); g.lineTo(E.x, E.y); g.lineTo(Hn.x, Hn.y); g.stroke();
+    // manşet
+    const dx = Hn.x - E.x, dy = Hn.y - E.y, dl = Math.hypot(dx, dy) || 1, ux = dx / dl, uy = dy / dl;
+    g.strokeStyle = sleeveD; g.lineWidth = 50; g.beginPath(); g.moveTo(Hn.x - ux * 14, Hn.y - uy * 14); g.lineTo(Hn.x - ux * 2, Hn.y - uy * 2); g.stroke();
+    // el: avuç + parmaklar (açık el ↔ yumruk)
+    const hx = Hn.x + ux * 26, hy = Hn.y + uy * 26, ang = Math.atan2(uy, ux);
+    g.save(); g.translate(hx, hy); g.rotate(ang - Math.PI / 2);
+    g.fillStyle = LOOK.skin; g.strokeStyle = shade(LOOK.skin, 0.75); g.lineWidth = 3;
+    g.beginPath(); g.ellipse(0, 0, 26, 30, 0, 0, Math.PI * 2); g.fill(); g.stroke();
+    const open = A.hand;
+    for (let i = 0; i < 4; i++) { const fx = -15 + i * 10, len = 12 + open * 22 - Math.abs(i - 1.5) * 3; g.beginPath(); g.moveTo(fx, 18); g.lineTo(fx + (i - 1.5) * open * 3, 18 + len); g.lineWidth = 11; g.strokeStyle = LOOK.skin; g.stroke(); }
+    g.lineWidth = 11; g.beginPath(); g.moveTo(-sx * 20, 0); g.lineTo(-sx * (26 + open * 14), 10 + open * 6); g.stroke();   // başparmak
+    // bileklik (sağ kol)
+    if (sx === 1) { g.strokeStyle = '#c9ced6'; g.lineWidth = 5; g.beginPath(); g.ellipse(0, -26, 22, 7, 0, 0, Math.PI * 2); g.stroke(); }
+    g.restore();
+  }
+}
 function draw() {
   const s = cv.width / W;
   g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height);
@@ -143,6 +191,7 @@ function draw() {
   g.restore();
   // boyun
   g.fillStyle = shade(LOOK.skin, 0.82); rr(352, 515 + bob * 0.3, 96, 80, 30); g.fill();
+  drawArms(breathe);
   // ---- kafa ----
   g.save(); g.translate(400 + lookX * 6, 372 + bob); g.rotate(tilt);
   const hair = LOOK.hair, hairL = shade(hair, 1.6);
