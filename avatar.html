@@ -32,17 +32,17 @@
      ?arka=yesil  → yeşil perde (LIVE Studio'da renk anahtarı ile silinir)
      ?arka=koyu   → koyu arka plan          (varsayılan: şeffaf)
      ?ayar=1      → mikrofon seçimi ve hassasiyet ayarı görünür
-     ?ten=1..5  ?sac=1..5  ?renk=1..6  → karakterin görünüşü
+     ?ten=1..5  ?sac=1..5  ?renk=1..6 (1 beyaz kapüşonlu)  ?kulaklik=1  → görünüş
    ===================================================================== */
 const Q = new URLSearchParams(location.search);
 if (Q.get('arka') === 'yesil') document.body.classList.add('yesil');
 if (Q.get('arka') === 'koyu') document.body.classList.add('koyu');
 const AYAR = Q.get('ayar') === '1';
-const SKINS = ['#f1c9a5', '#e0ac85', '#c68c63', '#9a6440', '#6e4630'];
-const HAIRS = ['#2b1d14', '#5a3a22', '#141414', '#c9a46a', '#8a4b2a'];
-const SHIRTS = ['#e53935', '#1e88e5', '#43a047', '#8e24aa', '#fb8c00', '#212121'];
+const SKINS = ['#f1c9a5', '#d9a47e', '#c68c63', '#9a6440', '#6e4630'];
+const HAIRS = ['#2b1d14', '#5a3a22', '#1a1512', '#c9a46a', '#8a4b2a'];
+const SHIRTS = ['#f4f2ee', '#e53935', '#1e88e5', '#43a047', '#8e24aa', '#212121'];
 const pickQ = (k, a, d) => a[Math.min(a.length, Math.max(1, Number(Q.get(k)) || d)) - 1];
-const LOOK = { skin: pickQ('ten', SKINS, 2), hair: pickQ('sac', HAIRS, 1), shirt: pickQ('renk', SHIRTS, 2) };
+const LOOK = { skin: pickQ('ten', SKINS, 2), hair: pickQ('sac', HAIRS, 3), shirt: pickQ('renk', SHIRTS, 1) };
 
 const cv = document.getElementById('c'), g = cv.getContext('2d');
 const W = 800, H = 800;
@@ -110,64 +110,104 @@ function frame(now) {
 }
 function rr(x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
 function shade(hex, k) { const n = parseInt(hex.slice(1), 16); const f = c => Math.round(clamp(c * k, 0, 255)); return 'rgb(' + f(n >> 16 & 255) + ',' + f(n >> 8 & 255) + ',' + f(n & 255) + ')'; }
+// kıvırcık saç bukleleri (sabit, her açılışta aynı)
+const CURLS = (() => { const a = []; let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 70; i++) { const ang = Math.PI * (1.08 + r() * 0.84), rad = 140 + r() * 45; a.push({ x: Math.cos(ang) * rad, y: -55 + Math.sin(ang) * rad * 0.95, r: 22 + r() * 20 }); }
+  for (let i = 0; i < 24; i++) a.push({ x: -120 + r() * 240, y: -175 + r() * 60, r: 28 + r() * 20 });
+  for (let i = 0; i < 6; i++) a.push({ x: (r() < 0.5 ? -1 : 1) * (140 + r() * 12), y: -70 + r() * 40, r: 14 + r() * 8 });
+  return a; })();
+const STUBBLE = (() => { const a = []; let seed = 3; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 900; i++) { const x = -150 + r() * 300, y = 20 + r() * 170; const e = (x * x) / (150 * 150) + ((y - 0) * (y - 0)) / (185 * 185); if (e < 1 && !(Math.abs(x) < 70 && y < 70)) a.push([x, y]); }
+  return a; })();
+const KULAKLIK = Q.get('kulaklik') === '1';
 function draw() {
   const s = cv.width / W;
   g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height);
   g.setTransform(s, 0, 0, s, 0, 0);
-  const breathe = Math.sin(t * 2) * 4, bob = -bounce * 18 + breathe, tilt = Math.sin(t * 6) * 0.05 * talk + lookX * 0.06;
-  // konuşma halkası
+  const breathe = Math.sin(t * 2) * 4, bob = -bounce * 16 + breathe, tilt = Math.sin(t * 6) * 0.05 * talk + lookX * 0.06;
+  const open = clamp(level * 1.3, 0, 1);
   if (level > 0.08) { g.save(); g.globalAlpha = Math.min(0.6, level); g.strokeStyle = '#ffd23d'; g.lineWidth = 10; g.beginPath(); g.arc(400, 430, 330 + level * 30, 0, Math.PI * 2); g.stroke(); g.restore(); }
-  // gövde
+  // ---- beyaz kapüşonlu ----
+  const hood = LOOK.shirt, hoodD = shade(hood, 0.86), hoodDD = shade(hood, 0.74);
   g.save(); g.translate(400, 800 + breathe * 0.5);
-  g.fillStyle = LOOK.shirt; g.beginPath(); g.moveTo(-250, 0); g.quadraticCurveTo(-240, -190, -110, -215); g.lineTo(110, -215); g.quadraticCurveTo(240, -190, 250, 0); g.closePath(); g.fill();
-  g.fillStyle = shade(LOOK.shirt, 0.75); g.beginPath(); g.moveTo(-60, -215); g.lineTo(0, -150); g.lineTo(60, -215); g.closePath(); g.fill();
-  g.fillStyle = LOOK.skin; g.beginPath(); g.moveTo(-50, -215); g.lineTo(0, -160); g.lineTo(50, -215); g.closePath(); g.fill();
+  g.fillStyle = hood; g.beginPath(); g.moveTo(-290, 0); g.quadraticCurveTo(-280, -200, -120, -232); g.lineTo(120, -232); g.quadraticCurveTo(280, -200, 290, 0); g.closePath(); g.fill();
+  g.fillStyle = hoodD; g.beginPath(); g.moveTo(-290, 0); g.quadraticCurveTo(-284, -150, -200, -205); g.quadraticCurveTo(-240, -110, -230, 0); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(290, 0); g.quadraticCurveTo(284, -150, 200, -205); g.quadraticCurveTo(240, -110, 230, 0); g.closePath(); g.fill();
+  // kapüşon yakası
+  g.fillStyle = hoodD; g.beginPath(); g.ellipse(0, -232, 150, 46, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = hood; g.beginPath(); g.ellipse(0, -238, 118, 30, 0, 0, Math.PI * 2); g.fill();
+  // bağcıklar
+  g.strokeStyle = '#e9e6e0'; g.lineWidth = 7; g.lineCap = 'round';
+  for (const sx of [-1, 1]) { const sw = Math.sin(t * 2 + sx) * 4; g.beginPath(); g.moveTo(sx * 34, -214); g.quadraticCurveTo(sx * 40 + sw, -150, sx * 36 + sw, -96); g.stroke(); g.fillStyle = '#9aa0a8'; g.fillRect(sx * 36 + sw - 4, -100, 8, 24); }
+  g.strokeStyle = hoodDD; g.lineWidth = 3; g.beginPath(); g.moveTo(-160, -60); g.quadraticCurveTo(0, -40, 160, -60); g.stroke();
   g.restore();
   // boyun
-  g.fillStyle = shade(LOOK.skin, 0.85); rr(355, 520 + bob * 0.3, 90, 90, 30); g.fill();
-  // kafa
-  g.save(); g.translate(400 + lookX * 6, 380 + bob); g.rotate(tilt);
-  // arka saç
-  g.fillStyle = LOOK.hair; g.beginPath(); g.ellipse(0, -40, 175, 185, 0, Math.PI, 0); g.fill();
+  g.fillStyle = shade(LOOK.skin, 0.82); rr(352, 515 + bob * 0.3, 96, 80, 30); g.fill();
+  // ---- kafa ----
+  g.save(); g.translate(400 + lookX * 6, 372 + bob); g.rotate(tilt);
+  const hair = LOOK.hair, hairL = shade(hair, 1.6);
+  // arka saç kütlesi
+  g.fillStyle = hair; g.beginPath(); g.ellipse(0, -60, 190, 165, 0, Math.PI, 0); g.fill();
   // kulaklar
-  g.fillStyle = LOOK.skin; g.beginPath(); g.ellipse(-158, 10, 26, 40, 0, 0, Math.PI * 2); g.ellipse(158, 10, 26, 40, 0, 0, Math.PI * 2); g.fill();
-  // yüz
-  g.fillStyle = LOOK.skin; g.beginPath(); g.ellipse(0, 0, 160, 180, 0, 0, Math.PI * 2); g.fill();
-  // ön saç
-  g.fillStyle = LOOK.hair; g.beginPath(); g.moveTo(-165, -40); g.quadraticCurveTo(-150, -190, 0, -185); g.quadraticCurveTo(150, -190, 165, -40);
-  g.quadraticCurveTo(120, -120, 40, -110); g.quadraticCurveTo(-20, -150, -60, -105); g.quadraticCurveTo(-120, -110, -165, -40); g.fill();
-  // kaşlar
-  const brow = -10 * talk - level * 12;
-  g.strokeStyle = shade(LOOK.hair, 1.2); g.lineWidth = 12; g.lineCap = 'round';
-  for (const sx of [-1, 1]) { g.beginPath(); g.moveTo(sx * 40, -62 + brow); g.quadraticCurveTo(sx * 72, -78 + brow, sx * 104, -64 + brow); g.stroke(); }
-  // gözler
-  const eyeH = blink > 0 ? 3 : 26;
+  g.fillStyle = LOOK.skin; g.beginPath(); g.ellipse(-152, 14, 24, 40, 0.1, 0, Math.PI * 2); g.ellipse(152, 14, 24, 40, -0.1, 0, Math.PI * 2); g.fill();
+  g.fillStyle = shade(LOOK.skin, 0.8); g.beginPath(); g.ellipse(-154, 14, 11, 22, 0, 0, Math.PI * 2); g.ellipse(154, 14, 11, 22, 0, 0, Math.PI * 2); g.fill();
+  // yüz (biraz uzun oval)
+  g.fillStyle = LOOK.skin; g.beginPath(); g.ellipse(0, 6, 150, 186, 0, 0, Math.PI * 2); g.fill();
+  // hafif sakal (çene ve yanaklar)
+  g.save(); g.beginPath(); g.ellipse(0, 6, 150, 186, 0, 0, Math.PI * 2); g.clip();
+  g.fillStyle = 'rgba(40,28,22,0.16)'; g.beginPath(); g.ellipse(0, 125, 150, 92, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(30,20,15,0.16)'; for (const [x, y] of STUBBLE) g.fillRect(x, y, 1.8, 1.8);
+  g.restore();
+  // kıvırcık saç (önde, alnı kısmen örter)
+  for (const c of CURLS) { g.fillStyle = hair; g.beginPath(); g.arc(c.x, c.y, c.r, 0, Math.PI * 2); g.fill(); }
+  g.strokeStyle = hairL; g.lineWidth = 3;
+  for (const c of CURLS) { g.beginPath(); g.arc(c.x - c.r * 0.15, c.y - c.r * 0.1, c.r * 0.55, Math.PI * 1.1, Math.PI * 1.9); g.stroke(); }
+  // alın çizgisi: buklelerin altı
+  g.fillStyle = hair; g.beginPath(); g.moveTo(-140, -70); g.quadraticCurveTo(-90, -118, -20, -112); g.quadraticCurveTo(50, -125, 110, -105); g.quadraticCurveTo(140, -95, 145, -70); g.lineTo(150, -120); g.lineTo(-150, -120); g.closePath(); g.fill();
+  // kalın, düz kaşlar
+  const brow = -8 * talk - level * 10;
+  g.fillStyle = shade(hair, 1.1);
+  for (const sx of [-1, 1]) { g.beginPath(); g.moveTo(sx * 28, -58 + brow); g.quadraticCurveTo(sx * 70, -74 + brow, sx * 112, -62 + brow); g.lineTo(sx * 110, -50 + brow); g.quadraticCurveTo(sx * 70, -60 + brow, sx * 30, -46 + brow); g.closePath(); g.fill(); }
+  // gözler: yarı kapalı, rahat bakış (konuşurken biraz açılır)
+  const lid = blink > 0 ? 1 : 0.42 - talk * 0.12 - level * 0.1;
   for (const sx of [-1, 1]) {
-    g.fillStyle = '#ffffff'; g.beginPath(); g.ellipse(sx * 70, -18, 30, eyeH, 0, 0, Math.PI * 2); g.fill();
-    if (blink <= 0) { g.fillStyle = '#2b1d14'; g.beginPath(); g.arc(sx * 70 + lookX * 12, -15, 15, 0, Math.PI * 2); g.fill(); g.fillStyle = '#fff'; g.beginPath(); g.arc(sx * 70 + lookX * 12 + 5, -21, 5, 0, Math.PI * 2); g.fill(); }
+    const ex = sx * 66, ey = -14;
+    g.fillStyle = '#ffffff'; g.beginPath(); g.ellipse(ex, ey, 30, 17, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#2a1a12'; g.beginPath(); g.arc(ex + lookX * 10, ey + 2, 12, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(ex + lookX * 10 + 4, ey - 3, 3.5, 0, Math.PI * 2); g.fill();
+    // üst göz kapağı: gözün üst kısmını örter (yarı kapalı bakış)
+    const lidY = ey - 17 + 34 * lid;
+    g.save(); g.beginPath(); g.ellipse(ex, ey, 31, 18, 0, 0, Math.PI * 2); g.clip();
+    g.fillStyle = shade(LOOK.skin, 0.92); g.fillRect(ex - 32, ey - 20, 64, lidY - (ey - 20)); g.restore();
+    g.strokeStyle = '#3a2418'; g.lineWidth = 4; g.beginPath(); g.moveTo(ex - 31, ey + 1); g.quadraticCurveTo(ex, lidY - 6, ex + 31, ey + 1); g.stroke();
+    g.strokeStyle = 'rgba(60,35,25,0.35)'; g.lineWidth = 3; g.beginPath(); g.arc(ex, ey + 16, 22, 0.2 * Math.PI, 0.8 * Math.PI); g.stroke();
   }
-  // yanaklar
-  g.fillStyle = 'rgba(255,120,120,0.22)'; g.beginPath(); g.ellipse(-100, 50, 26, 16, 0, 0, Math.PI * 2); g.ellipse(100, 50, 26, 16, 0, 0, Math.PI * 2); g.fill();
   // burun
-  g.strokeStyle = shade(LOOK.skin, 0.75); g.lineWidth = 6; g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(-10, 35, 4, 40); g.stroke();
-  // ağız: sesin şiddetine göre açılır; sessizken hafif gülümser
-  const open = clamp(level * 1.3, 0, 1), mw = 46 + open * 22 + Math.sin(t * 22) * 4 * open, mh = 6 + open * 52;
-  if (open < 0.06) {
-    g.strokeStyle = '#7a3b2e'; g.lineWidth = 8; g.beginPath(); g.moveTo(-40, 92); g.quadraticCurveTo(0, 112, 40, 92); g.stroke();
-  } else {
-    g.fillStyle = '#5a1a1a'; g.beginPath(); g.ellipse(0, 98, mw, mh, 0, 0, Math.PI * 2); g.fill();
-    g.save(); g.clip();
-    g.fillStyle = '#ffffff'; g.fillRect(-mw, 98 - mh, mw * 2, Math.min(16, mh * 0.35));
-    g.fillStyle = '#e06666'; g.beginPath(); g.ellipse(0, 98 + mh * 0.7, mw * 0.6, mh * 0.45, 0, 0, Math.PI * 2); g.fill();
-    g.restore();
+  g.strokeStyle = shade(LOOK.skin, 0.72); g.lineWidth = 6; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(-6, -2); g.quadraticCurveTo(-16, 44, -2, 54); g.stroke();
+  g.fillStyle = shade(LOOK.skin, 0.8); g.beginPath(); g.ellipse(-14, 56, 9, 6, 0, 0, Math.PI * 2); g.ellipse(14, 56, 9, 6, 0, 0, Math.PI * 2); g.fill();
+  // ağız
+  const my = 110, mw = 40 + open * 18 + Math.sin(t * 22) * 3 * open, mh = 5 + open * 46;
+  if (open < 0.06) { g.strokeStyle = '#8a4a3a'; g.lineWidth = 7; g.beginPath(); g.moveTo(-32, my - 2); g.quadraticCurveTo(0, my + 12, 34, my - 4); g.stroke(); }
+  else {
+    g.fillStyle = '#4a1414'; g.beginPath(); g.ellipse(0, my + mh * 0.35, mw, mh, 0, 0, Math.PI * 2); g.fill();
+    g.save(); g.clip(); g.fillStyle = '#fff'; g.fillRect(-mw, my + mh * 0.35 - mh, mw * 2, Math.min(14, mh * 0.3));
+    g.fillStyle = '#d86060'; g.beginPath(); g.ellipse(0, my + mh * 1.05, mw * 0.6, mh * 0.45, 0, 0, Math.PI * 2); g.fill(); g.restore();
   }
-  // kulaklık
-  g.strokeStyle = '#222'; g.lineWidth = 22; g.beginPath(); g.arc(0, -10, 182, Math.PI * 1.05, Math.PI * 1.95); g.stroke();
-  g.fillStyle = '#2a2a2a'; for (const sx of [-1, 1]) { rr(sx * 175 - 30, -40, 60, 100, 26); g.fill(); }
-  g.fillStyle = LOOK.shirt; for (const sx of [-1, 1]) { rr(sx * 175 - 18, -22, 36, 64, 16); g.fill(); }
-  // mikrofon kolu
-  g.strokeStyle = '#333'; g.lineWidth = 9; g.beginPath(); g.moveTo(-170, 40); g.quadraticCurveTo(-140, 130, -60, 130); g.stroke();
-  g.fillStyle = level > 0.08 ? '#ff4d4d' : '#444'; g.beginPath(); g.ellipse(-52, 128, 18, 14, 0, 0, Math.PI * 2); g.fill();
+  // gür bıyık (ağız açılınca biraz kalkar)
+  const mu = -open * 8;
+  g.fillStyle = shade(hair, 1.05); g.beginPath();
+  g.moveTo(0, 74 + mu); g.quadraticCurveTo(-40, 64 + mu, -78, 92 + mu); g.quadraticCurveTo(-88, 106 + mu, -70, 104 + mu);
+  g.quadraticCurveTo(-40, 92 + mu, 0, 96 + mu); g.quadraticCurveTo(40, 92 + mu, 70, 104 + mu); g.quadraticCurveTo(88, 106 + mu, 78, 92 + mu);
+  g.quadraticCurveTo(40, 64 + mu, 0, 74 + mu); g.closePath(); g.fill();
+  g.strokeStyle = hairL; g.lineWidth = 2; for (let i = -60; i <= 60; i += 12) { g.beginPath(); g.moveTo(i, 78 + mu + Math.abs(i) * 0.15); g.lineTo(i * 1.1, 92 + mu + Math.abs(i) * 0.12); g.stroke(); }
+  // isteğe bağlı kulaklık (?kulaklik=1)
+  if (KULAKLIK) {
+    g.strokeStyle = '#222'; g.lineWidth = 22; g.beginPath(); g.arc(0, -10, 190, Math.PI * 1.05, Math.PI * 1.95); g.stroke();
+    g.fillStyle = '#2a2a2a'; for (const sx of [-1, 1]) { rr(sx * 168 - 30, -30, 60, 100, 26); g.fill(); }
+    g.strokeStyle = '#333'; g.lineWidth = 9; g.beginPath(); g.moveTo(-160, 50); g.quadraticCurveTo(-130, 140, -60, 140); g.stroke();
+    g.fillStyle = level > 0.08 ? '#ff4d4d' : '#444'; g.beginPath(); g.ellipse(-52, 138, 18, 14, 0, 0, Math.PI * 2); g.fill();
+  }
   g.restore();
 }
 requestAnimationFrame(frame);
