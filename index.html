@@ -294,7 +294,8 @@ function startLoop(update, render) {
    Hediye ve beğeni oyu ETKİLEMEZ; oy yalnızca yorumla verilir.
    ===================================================================== */
 const SALON = {
-  voteSeconds: 30,          // oylama süresi
+  voteSeconds: 35,          // oylama süresi
+  graceSeconds: 12,         // sayaç bitince oylar bu kadar daha sayılır (TikTok görüntüsü izleyiciye ~10-15 sn geç ulaşır)
   extendSeconds: 20,        // hiç oy gelmezse oylama bu kadar uzar
   maxVoteSeconds: 70,       // yine oy yoksa rastgele seçilir
   revealSeconds: 4.5,       // kazanan oyun gösterimi
@@ -378,7 +379,7 @@ function onTikTok(raw) {
   const e = normEvent(raw); if (!e) return;
   if (S.phase === 'oylama' || S.phase === 'secildi') {
     if (e.type === 'chat' || e.type === 'like' || e.type === 'gift') S.players.set(e.key, { user: e.key, nickname: e.raw });
-    if (S.phase === 'oylama' && e.type === 'chat') {
+    if (S.phase === 'oylama' && e.type === 'chat') {   // ek süre içinde de (sayaç 0 iken) oy kabul edilir
       const idx = matchVote(e.text);
       if (idx >= 0) {
         const prev = S.votes.get(e.key);
@@ -423,8 +424,8 @@ function update(dt) {
     S.paused = (S.tiktok === 'koptu' || S.tiktok === 'bağlanıyor') && (S.pauseUsed || 0) < 60;
     if (S.paused) { S.voteEnd += dt; S.pauseUsed = (S.pauseUsed || 0) + dt; }
     const left = S.voteEnd - S.t;
-    if (left <= 5 && Math.ceil(left) !== Math.ceil(left + dt)) SFX.tick();
-    if (left <= 0) endVote();
+    if (left > 0 && left <= 5 && Math.ceil(left) !== Math.ceil(left + dt)) SFX.tick();
+    if (left <= -SALON.graceSeconds) endVote();
   } else if (S.phase === 'secildi') {
     if (S.phaseT >= SALON.revealSeconds && (S.gameReady || S.phaseT > SALON.readyTimeout)) {
       if (S.gameReady) showGame(); else startVote();
@@ -492,8 +493,13 @@ function drawVote() {
   });
   // süre
   const ty = 1192;
-  panel(330, ty - 44, 420, 88, 44, left <= 5 ? 'rgba(200,30,30,0.9)' : 'rgba(255,255,255,0.14)', '#ffd23d', 3);
-  txt('⏱️ ' + Math.ceil(left) + ' sn', 540, ty + 2, 52, '#ffffff', 'center', { lw: 8 });
+  if (S.voteEnd - S.t > 0) {
+    panel(330, ty - 44, 420, 88, 44, left <= 5 ? 'rgba(200,30,30,0.9)' : 'rgba(255,255,255,0.14)', '#ffd23d', 3);
+    txt('⏱️ ' + Math.ceil(left) + ' sn', 540, ty + 2, 52, '#ffffff', 'center', { lw: 8 });
+  } else {
+    panel(210, ty - 44, 660, 88, 44, 'rgba(255,255,255,0.14)', '#ffd23d', 3);
+    txt('⏳ Son oylar sayılıyor…', 540, ty + 2, 44, '#ffd23d', 'center', { lw: 7 });
+  }
   // son oy verenler
   const fy = 1262;
   const items = S.feed.slice(0, 3).map(f => '✅ ' + f.name + ' → ' + (f.idx + 1));
