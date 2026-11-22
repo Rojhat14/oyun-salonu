@@ -551,7 +551,7 @@ const SORULAR = [
    ===================================================================== */
 const CFG = {
   introSeconds: NET.embedded ? 10 : 15,
-  readSeconds: 4,          // soru ekranda, süre başlamadan (sunucu okusun)
+  readSeconds: 6,          // soru ekranda, süre başlamadan (sunucu/spiker okusun)
   answerSeconds: 20,       // cevap süresi
   graceSeconds: 8,         // süre bitince de oylar sayılır (TikTok görüntüsü izleyiciye ~10 sn geç ulaşır)
   finalSeconds: 15,
@@ -753,7 +753,7 @@ function buildDeck() {
 function newRound() {
   G.round = STORE.nextRound(); G.phase = 'intro'; G.phaseT = 0; G.qi = 0; G.deck = buildDeck(); G.players.clear();
   G.score = { insan: 0, maymun: 0 }; G.finSent = false; G.q = null;
-  say('Hoş geldiniz! Bugün Profesör Muz sizinle yarışıyor. Bakalım kim daha akıllı!');
+  say('Hoş geldiniz! Bugün Profesör Muz sizinle yarışıyor. Bakalım kim daha akıllı! Yoruma A, B, C ya da D yazarak katılın!');
   setMonkey('idle');
 }
 function startQuestion() {
@@ -763,10 +763,18 @@ function startQuestion() {
   G.monkey.pick = -1; G.monkey.lockT = rand(4, 15);
   setMonkey('think');
   const lvTxt = G.q.level === 1 ? 'Kolay bir soru… ya da öyle mi?' : G.q.level === 2 ? 'Biraz zorlaşıyor!' : 'Zor soru geliyor, dikkat!';
-  say('Soru ' + (G.qi + 1) + '! ' + lvTxt);
+  say('Soru ' + (G.qi + 1) + '! ' + lvTxt, { ses: false });
+  // soruyu ve şıkları sesli oku
+  SPEECH.clear();
+  SPEECH.say(temizSes('Soru ' + (G.qi + 1) + '. ' + G.q.text + ' ' + G.q.choices.map((c, i) => LETTERS[i] + ': ' + c).join('. ') + '.'), 3);
   SFX.go();
 }
-function say(text) { G.bubble = { text, born: G.t }; }
+// sunucu konuşur: balon + yapay zekâ sesi (adrese ?spiker=0 eklenirse sadece balon)
+const temizSes = t => t.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '').replace(/%(\d+)/g, 'yüzde $1').replace(/\s+/g, ' ').trim();
+function say(text, opts) {
+  G.bubble = { text, born: G.t };
+  if (!opts || opts.ses !== false) SPEECH.say(temizSes(text), (opts && opts.prio) || 2);
+}
 function setMonkey(mood) { G.monkey.mood = mood; G.monkey.moodT = 0; }
 function ticker(s) { G.ticker.push({ s, t: G.t }); if (G.ticker.length > 6) G.ticker.shift(); }
 function toastPush(o) { if (o.kind === 'gift') G.toasts.unshift(o); else G.toasts.push(o); if (G.toasts.length > 15) G.toasts.length = 15; }
@@ -794,6 +802,7 @@ function onEvent(raw) {
   } else if (e.type === 'gift') {
     if (G.t - (G.lastGift || -99) > 3) {
       G.lastGift = G.t; G.blast = { name: e.name, born: G.t }; toastPush({ kind: 'gift', name: e.name }); SFX.thanks();
+      SPEECH.say(speakName(e.raw) + ', çok teşekkürler! Muz yağmuru!', 1);
       for (let i = 0; i < 40; i++) G.bananas.push({ x: rand(0, W), y: rand(-400, -40), vy: rand(250, 520), r: rand(0, TAU), vr: rand(-4, 4), s: rand(34, 60) });
       if (G.monkey.mood !== 'think') setMonkey('happy');
     }
@@ -824,7 +833,7 @@ function finalizeQuestion() {
   G.revealInfo = Object.assign(st, { humans, monk });
   const fastest = Array.from(G.answers.values()).filter(a => a.idx === G.q.correct).sort((a, b) => a.t - b.t).slice(0, 3).map(a => a.name);
   if (fastest.length) ticker('⚡ En hızlı doğrular: ' + fastest.join(', '));
-  if (humans && !monk) say('İzleyiciler bildi, maymun yanıldı! 😂 %' + st.pctCorrect + "'niz doğru!");
+  if (humans && !monk) say('İzleyiciler bildi, maymun yanıldı! 😂 %' + st.pctCorrect + ' doğru bildi!');
   else if (monk && !humans) say(st.total ? 'Maymun bildi, siz yanıldınız! 🙈 Sadece %' + st.pctCorrect + '!' : 'Kimse cevap vermedi, maymun puanı aldı! 🍌');
   else if (monk && humans) say('İkiniz de bildiniz! %' + st.pctCorrect + ' doğru. Çekişme sürüyor!');
   else say('Kimse bilemedi! Doğru cevap ' + LETTERS[G.q.correct] + ' idi.');
@@ -850,7 +859,7 @@ function update(dt) {
       G.phase = 'reveal'; G.phaseT = 0; revealScore();
       const monk = G.monkey.pick === G.q.correct;
       setMonkey(monk ? 'happy' : 'sad'); if (monk) SFX.win(); else SFX.boom();
-      say('Doğru cevap ' + LETTERS[G.q.correct] + '! ' + (monk ? 'Profesör Muz bildi! 🍌' : 'Profesör Muz yanıldı! 😂'));
+      SPEECH.clear(); say('Doğru cevap ' + LETTERS[G.q.correct] + ', ' + G.q.choices[G.q.correct] + '! ' + (monk ? 'Profesör Muz bildi! 🍌' : 'Profesör Muz yanıldı! 😂'), { prio: 3 });
     }
   } else if (G.phase === 'reveal') {
     if (!G.revealInfo && G.phaseT >= CFG.graceSeconds) finalizeQuestion();
@@ -885,7 +894,7 @@ let hostTalk = 0, blinkT = 3;
 function animate(dt) {
   const t = G.t;
   // sunucu: mikrofon varsa ona göre, yoksa yeni konuşma balonunda konuşur gibi
-  const mic = micOK ? readMic() : 0, fake = !micOK && G.bubble && G.t - G.bubble.born < 2.4 ? 0.35 + 0.35 * Math.abs(Math.sin(t * 13)) : 0;
+  const mic = micOK ? readMic() : 0, fake = (SPEECH.speaking || (!micOK && G.bubble && G.t - G.bubble.born < 2.4)) ? 0.35 + 0.35 * Math.abs(Math.sin(t * 13)) : 0;
   const lv = Math.max(mic, fake);
   hostTalk = lv > hostTalk ? lerp(hostTalk, lv, 0.6) : lerp(hostTalk, lv, 0.25);
   HOST.mouth.scale.set(1 + hostTalk * 0.3, 0.25 + hostTalk * 1.6, 1);
